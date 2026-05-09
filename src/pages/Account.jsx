@@ -1,9 +1,24 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import { ChevronDown, RotateCcw, Box, Building2, LayoutGrid, Package, User, Heart, MapPin, FileText, Building, Pencil, Lock, ArrowLeft, Mail, Smartphone, X, Trash2, Plus, ArrowRight } from 'lucide-react';
+import {
+  fetchCarMakers,
+  fetchCarModels,
+  fetchCarVariants,
+  fetchUserGarageVehicles,
+  createUserGarageVehicle,
+  deleteUserGarageVehicle,
+  fetchCustomerProfile,
+  createCustomerProfile,
+  updateCustomerProfile,
+} from '../api/shop';
+import { clearCredentials } from '../store/slices/authSlice';
 
 const Account = () => {
   const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const auth = useSelector((state) => state.auth);
   const [activeTab, setActiveTab] = useState('Orders');
   const [statusFilterOpen, setStatusFilterOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('Completed');
@@ -18,6 +33,32 @@ const Account = () => {
   const [returnStep, setReturnStep] = useState(1); // 1: Reason, 2: Options
   const [profileView, setProfileView] = useState('view'); // 'view', 'edit', 'change-password'
   const [selectedReturnOption, setSelectedReturnOption] = useState(null);
+  const [garageVehicles, setGarageVehicles] = useState([]);
+  const [garageLoading, setGarageLoading] = useState(false);
+  const [garageSubmitting, setGarageSubmitting] = useState(false);
+  const [garageError, setGarageError] = useState('');
+  const [showAddGarageForm, setShowAddGarageForm] = useState(false);
+  const [garageMakers, setGarageMakers] = useState([]);
+  const [garageModels, setGarageModels] = useState([]);
+  const [garageVariants, setGarageVariants] = useState([]);
+  const [garageModelsLoading, setGarageModelsLoading] = useState(false);
+  const [garageVariantsLoading, setGarageVariantsLoading] = useState(false);
+  const garageModelsReqRef = useRef(0);
+  const garageVariantsReqRef = useRef(0);
+  const [customerProfile, setCustomerProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileSubmitting, setProfileSubmitting] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [garageForm, setGarageForm] = useState({
+    car_maker: '',
+    car_model: '',
+    car_variant: '',
+    year: '',
+    vin: '',
+    type_engine: '',
+    type_liters: '',
+    oem_brand_url: '',
+  });
 
   const statuses = ['Completed', 'In Transit', 'Cancelled'];
   const vehicles = ['All Cars', 'BMW i8', 'Audi A6', 'Mercedes C-Class', 'Tesla Model 3'];
@@ -36,6 +77,23 @@ const Account = () => {
     'Missing parts in the package',
     'Item arrived late'
   ];
+
+  const profileExists = Boolean(customerProfile?.id);
+  const profileForm = {
+    first_name: customerProfile?.first_name || '',
+    last_name: customerProfile?.last_name || '',
+    email: customerProfile?.email || auth?.user?.email || '',
+    phone_number: customerProfile?.phone_number || '',
+    whatsapp_number: customerProfile?.whatsapp_number || '',
+    organization_name: customerProfile?.organization_name || '',
+    customer_type: customerProfile?.customer_type || 'general',
+    billing_address_1: customerProfile?.billing_address_1 || '',
+    billing_address_2: customerProfile?.billing_address_2 || '',
+    city: customerProfile?.city || '',
+    state: customerProfile?.state || '',
+    pin_code: customerProfile?.pin_code || '',
+    gst_no: customerProfile?.gst_no || '',
+  };
 
   const tabs = [
     { id: 'Garage', icon: Building },
@@ -74,6 +132,264 @@ const Account = () => {
     }
   ];
 
+  useEffect(() => {
+    if (!auth?.tokens?.access) {
+      navigate('/login');
+      return;
+    }
+    setProfileLoading(true);
+    setProfileError('');
+    fetchCustomerProfile(auth.tokens.access)
+      .then((data) => {
+        setCustomerProfile(data);
+      })
+      .catch((e) => {
+        const message = e instanceof Error ? e.message : 'Could not load profile.';
+        if (/not found/i.test(message)) {
+          setCustomerProfile(null);
+          return;
+        }
+        setProfileError(message);
+      })
+      .finally(() => setProfileLoading(false));
+  }, [auth?.tokens?.access, navigate]);
+
+  useEffect(() => {
+    if (!auth?.tokens?.access) return;
+    fetchCarMakers()
+      .then((r) => setGarageMakers(Array.isArray(r?.data) ? r.data : []))
+      .catch(() => setGarageMakers([]));
+  }, [auth?.tokens?.access]);
+
+  useEffect(() => {
+    if (activeTab !== 'Garage' || !auth?.tokens?.access || !profileExists) return;
+    setGarageLoading(true);
+    setGarageError('');
+    fetchUserGarageVehicles(auth.tokens.access)
+      .then((list) => setGarageVehicles(Array.isArray(list) ? list : []))
+      .catch((e) => {
+        setGarageVehicles([]);
+        setGarageError(e instanceof Error ? e.message : 'Could not load garage vehicles.');
+      })
+      .finally(() => setGarageLoading(false));
+  }, [activeTab, auth?.tokens?.access, profileExists]);
+
+  useEffect(() => {
+    if (!garageForm.car_maker) {
+      setGarageModelsLoading(false);
+      setGarageModels([]);
+      setGarageVariants([]);
+      return;
+    }
+    const selectedMaker = garageForm.car_maker;
+    const requestId = ++garageModelsReqRef.current;
+    setGarageModelsLoading(true);
+    fetchCarModels(selectedMaker)
+      .then((r) => {
+        if (requestId !== garageModelsReqRef.current) return;
+        const models = Array.isArray(r?.data) ? r.data : [];
+        setGarageModels(models);
+        setGarageForm((prev) => {
+          if (prev.car_maker !== selectedMaker) return prev;
+          const selectedModelStillValid = models.some((m) => String(m.id) === String(prev.car_model));
+          if (selectedModelStillValid) return prev;
+          return { ...prev, car_model: '', car_variant: '' };
+        });
+      })
+      .catch(() => {
+        if (requestId !== garageModelsReqRef.current) return;
+        setGarageModels([]);
+        setGarageForm((prev) => (prev.car_maker === selectedMaker ? { ...prev, car_model: '', car_variant: '' } : prev));
+      })
+      .finally(() => {
+        if (requestId !== garageModelsReqRef.current) return;
+        setGarageModelsLoading(false);
+      });
+  }, [garageForm.car_maker]);
+
+  useEffect(() => {
+    if (!garageForm.car_model) {
+      setGarageVariantsLoading(false);
+      setGarageVariants([]);
+      return;
+    }
+    const selectedModel = garageForm.car_model;
+    const selectedYear = garageForm.year || undefined;
+    const requestId = ++garageVariantsReqRef.current;
+    setGarageVariantsLoading(true);
+    fetchCarVariants(selectedModel, selectedYear)
+      .then((r) => {
+        if (requestId !== garageVariantsReqRef.current) return;
+        const variants = Array.isArray(r?.data) ? r.data : [];
+        setGarageVariants(variants);
+        setGarageForm((prev) => {
+          if (prev.car_model !== selectedModel) return prev;
+          if (!prev.car_variant) return prev;
+          const selectedVariantStillValid = variants.some((v) => String(v.id) === String(prev.car_variant));
+          if (selectedVariantStillValid) return prev;
+          return { ...prev, car_variant: '' };
+        });
+      })
+      .catch(() => {
+        if (requestId !== garageVariantsReqRef.current) return;
+        setGarageVariants([]);
+        setGarageForm((prev) => (prev.car_model === selectedModel ? { ...prev, car_variant: '' } : prev));
+      })
+      .finally(() => {
+        if (requestId !== garageVariantsReqRef.current) return;
+        setGarageVariantsLoading(false);
+      });
+  }, [garageForm.car_model, garageForm.year]);
+
+  const resetGarageForm = () => {
+    setGarageForm({
+      car_maker: '',
+      car_model: '',
+      car_variant: '',
+      year: '',
+      vin: '',
+      type_engine: '',
+      type_liters: '',
+      oem_brand_url: '',
+    });
+    setGarageModels([]);
+    setGarageVariants([]);
+  };
+
+  const handleGarageFormChange = (key, value) => {
+    setGarageError('');
+    if (key === 'car_maker') {
+      setGarageForm((prev) => ({ ...prev, car_maker: value, car_model: '', car_variant: '' }));
+      return;
+    }
+    if (key === 'car_model') {
+      setGarageForm((prev) => ({ ...prev, car_model: value, car_variant: '' }));
+      return;
+    }
+    setGarageForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleAddGarageVehicle = async (e) => {
+    e.preventDefault();
+    if (!auth?.tokens?.access) {
+      setGarageError('Please login first.');
+      return;
+    }
+    if (!garageForm.car_maker || !garageForm.car_model) {
+      setGarageError('Please select maker and model.');
+      return;
+    }
+    const selectedModelExists = garageModels.some((m) => String(m.id) === String(garageForm.car_model));
+    if (!selectedModelExists) {
+      setGarageError('Selected car model does not belong to the chosen maker. Please reselect model.');
+      return;
+    }
+    if (garageForm.car_variant) {
+      const selectedVariantExists = garageVariants.some((v) => String(v.id) === String(garageForm.car_variant));
+      if (!selectedVariantExists) {
+        setGarageError('Selected car variant does not belong to the chosen model. Please reselect variant.');
+        return;
+      }
+    }
+    if (!profileExists) {
+      setGarageError('Please create your customer profile first before adding vehicles to your garage.');
+      return;
+    }
+    setGarageSubmitting(true);
+    setGarageError('');
+    try {
+      const payload = {
+        car_maker: garageForm.car_maker,
+        car_model: garageForm.car_model,
+        ...(garageForm.car_variant ? { car_variant: garageForm.car_variant } : {}),
+        ...(garageForm.year ? { year: Number(garageForm.year) } : {}),
+        ...(garageForm.vin ? { vin: garageForm.vin } : {}),
+        ...(garageForm.type_engine ? { type_engine: garageForm.type_engine } : {}),
+        ...(garageForm.type_liters ? { type_liters: garageForm.type_liters } : {}),
+        ...(garageForm.oem_brand_url ? { oem_brand_url: garageForm.oem_brand_url } : {}),
+      };
+      const created = await createUserGarageVehicle(auth.tokens.access, payload);
+      setGarageVehicles((prev) => [created, ...prev]);
+      setShowAddGarageForm(false);
+      resetGarageForm();
+    } catch (e) {
+      setGarageError(e instanceof Error ? e.message : 'Unable to add vehicle.');
+    } finally {
+      setGarageSubmitting(false);
+    }
+  };
+
+  const handleDeleteGarageVehicle = async (id) => {
+    if (!auth?.tokens?.access) return;
+    try {
+      await deleteUserGarageVehicle(auth.tokens.access, id);
+      setGarageVehicles((prev) => prev.filter((v) => v.id !== id));
+    } catch (e) {
+      setGarageError(e instanceof Error ? e.message : 'Unable to delete vehicle.');
+    }
+  };
+
+  const handleCreateProfile = async () => {
+    if (!auth?.tokens?.access) {
+      navigate('/login');
+      return;
+    }
+    setProfileSubmitting(true);
+    setProfileError('');
+    const fallbackName = String(auth?.user?.username || '').trim() || 'Customer';
+    try {
+      const created = await createCustomerProfile(auth.tokens.access, {
+        email: auth?.user?.email || `${fallbackName.toLowerCase()}@example.com`,
+        first_name: fallbackName,
+      });
+      setCustomerProfile(created);
+      setActiveTab('Profile');
+      setProfileView('edit');
+    } catch (e) {
+      setProfileError(e instanceof Error ? e.message : 'Unable to create profile.');
+    } finally {
+      setProfileSubmitting(false);
+    }
+  };
+
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    if (!auth?.tokens?.access) return;
+    const form = new FormData(e.currentTarget);
+    const payload = {
+      first_name: String(form.get('first_name') || '').trim(),
+      last_name: String(form.get('last_name') || '').trim(),
+      email: String(form.get('email') || '').trim(),
+      phone_number: String(form.get('phone_number') || '').trim(),
+      whatsapp_number: String(form.get('whatsapp_number') || '').trim(),
+      organization_name: String(form.get('organization_name') || '').trim(),
+      customer_type: String(form.get('customer_type') || 'general').trim(),
+      billing_address_1: String(form.get('billing_address_1') || '').trim(),
+      billing_address_2: String(form.get('billing_address_2') || '').trim(),
+      city: String(form.get('city') || '').trim(),
+      state: String(form.get('state') || '').trim(),
+      pin_code: String(form.get('pin_code') || '').trim(),
+      gst_no: String(form.get('gst_no') || '').trim(),
+    };
+    if (!payload.first_name || !payload.email) {
+      setProfileError('First name and email are required.');
+      return;
+    }
+    setProfileSubmitting(true);
+    setProfileError('');
+    try {
+      const saved = profileExists
+        ? await updateCustomerProfile(auth.tokens.access, payload)
+        : await createCustomerProfile(auth.tokens.access, payload);
+      setCustomerProfile(saved);
+      setProfileView('view');
+    } catch (e) {
+      setProfileError(e instanceof Error ? e.message : 'Unable to save profile.');
+    } finally {
+      setProfileSubmitting(false);
+    }
+  };
+
   return (
     <div className="bg-white min-h-screen font-sans">
       <div className="max-w-[1200px] mx-auto px-4 md:px-6 py-10 md:py-16">
@@ -84,7 +400,10 @@ const Account = () => {
             <p className="text-gray-400 text-lg">Manage all your details at one place.</p>
           </div>
           <button 
-            onClick={() => navigate('/login')}
+            onClick={() => {
+              dispatch(clearCredentials());
+              navigate('/login');
+            }}
             className="flex items-center px-6 py-3 border border-red-100 text-red-500 rounded-full font-bold text-[14px] hover:bg-red-50 transition-all group"
           >
             <Lock className="w-4 h-4 mr-2 group-hover:rotate-12 transition-transform" />
@@ -547,6 +866,17 @@ const Account = () => {
           </div>
         )}
 
+        {profileError && (
+          <div className="mb-6 rounded-[16px] border border-red-100 bg-red-50 px-5 py-3 text-[14px] font-semibold text-red-600">
+            {profileError}
+          </div>
+        )}
+        {profileLoading && (
+          <div className="mb-6 rounded-[16px] border border-gray-100 bg-gray-50 px-5 py-3 text-[14px] font-semibold text-gray-600">
+            Loading your customer profile...
+          </div>
+        )}
+
         {activeTab === 'Profile' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
             {profileView === 'view' ? (
@@ -554,14 +884,16 @@ const Account = () => {
                 <div className="flex flex-col md:flex-row items-start md:items-center mb-12">
                   <div className="relative mb-6 md:mb-0 md:mr-10">
                     <div className="w-32 h-32 rounded-full overflow-hidden border-4 border-gray-50 shadow-inner">
-                      <img src="https://ui-avatars.com/api/?name=Anuradha+Singh&background=7c3aed&color=fff&size=128" alt="Profile" />
+                      <img src={`https://ui-avatars.com/api/?name=${encodeURIComponent(profileForm.first_name || 'Customer')}&background=7c3aed&color=fff&size=128`} alt="Profile" />
                     </div>
                     <button className="absolute bottom-1 right-1 w-9 h-9 bg-[#7c3aed] text-white rounded-full flex items-center justify-center border-4 border-white shadow-lg hover:scale-110 transition-transform">
                       <User className="w-4 h-4" />
                     </button>
                   </div>
                   <div>
-                    <h2 className="text-[28px] font-black text-[#111827] mb-1">Anuradha Singh</h2>
+                    <h2 className="text-[28px] font-black text-[#111827] mb-1">
+                      {profileExists ? `${profileForm.first_name} ${profileForm.last_name}`.trim() : 'Create your profile'}
+                    </h2>
                     <p className="text-gray-400 text-[15px]">Update your personal details and how we can reach you.</p>
                   </div>
                 </div>
@@ -569,20 +901,42 @@ const Account = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-2">
                     <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">Full Name</label>
-                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">Anuradha Singh</div>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">
+                      {profileExists ? `${profileForm.first_name} ${profileForm.last_name}`.trim() || '-' : '-'}
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">Email Address</label>
-                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">anusingh@gmail.com</div>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">{profileForm.email || '-'}</div>
                   </div>
                   <div className="space-y-2">
                     <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">Phone Number</label>
-                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">+91 1111 22222</div>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">{profileForm.phone_number || '-'}</div>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">Gender</label>
-                    <div className="flex space-x-3">
-                       <div className="px-8 py-4 bg-purple-50 border border-[#7c3aed] text-[#7c3aed] rounded-[18px] text-[14px] font-bold">Female</div>
+                    <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">WhatsApp Number</label>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">{profileForm.whatsapp_number || '-'}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">Customer Type</label>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827] capitalize">
+                      {profileForm.customer_type || 'general'}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">Organization</label>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">{profileForm.organization_name || '-'}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">GST No.</label>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">{profileForm.gst_no || '-'}</div>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-[13px] font-black text-gray-400 uppercase tracking-widest pl-1">Billing Address</label>
+                    <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[18px] px-6 py-4 text-[15px] font-bold text-[#111827]">
+                      {[profileForm.billing_address_1, profileForm.billing_address_2, profileForm.city, profileForm.state, profileForm.pin_code]
+                        .filter(Boolean)
+                        .join(', ') || '-'}
                     </div>
                   </div>
                 </div>
@@ -593,8 +947,17 @@ const Account = () => {
                     className="flex items-center px-8 py-4 border-[1.5px] border-[#7c3aed] text-[#7c3aed] rounded-full font-bold text-[15px] hover:bg-purple-50 transition-all group"
                   >
                     <Pencil className="w-4 h-4 mr-2.5 transition-transform group-hover:-rotate-12" />
-                    Edit Information
+                    {profileExists ? 'Edit Information' : 'Create Profile'}
                   </button>
+                  {!profileExists && (
+                    <button
+                      onClick={handleCreateProfile}
+                      disabled={profileSubmitting}
+                      className="flex items-center px-8 py-4 bg-[#7c3aed] text-white rounded-full font-bold text-[15px] hover:bg-[#6d28d9] transition-all shadow-lg shadow-purple-100/50 disabled:opacity-60"
+                    >
+                      {profileSubmitting ? 'Creating...' : 'Quick Create'}
+                    </button>
+                  )}
                   <button 
                     onClick={() => setProfileView('change-password')}
                     className="flex items-center px-8 py-4 bg-[#f47a4d] text-white rounded-full font-bold text-[15px] hover:bg-[#e66a3d] transition-all shadow-lg shadow-orange-100/50"
@@ -613,32 +976,67 @@ const Account = () => {
                    <h2 className="text-[22px] font-black text-[#111827]">Personal Information - Edit Profile</h2>
                 </div>
 
-                <div className="space-y-6 max-w-[800px]">
-                  {[
-                    { label: 'First Name', value: 'Anuradha', icon: User, color: 'purple' },
-                    { label: 'Last Name', value: 'Singh', icon: User, color: 'purple' },
-                    { label: 'Email', value: 'anusingh@gmail.com', icon: Mail, color: 'orange' },
-                    { label: 'Number', value: '+91 1111 22222', icon: Smartphone, color: 'orange' }
-                  ].map((field, idx) => (
-                    <div key={idx} className="bg-white border border-gray-100 rounded-[24px] p-6 shadow-sm">
-                      <div className="flex items-center mb-4">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center mr-3 ${field.color === 'purple' ? 'bg-purple-50' : 'bg-orange-50'}`}>
-                           <field.icon className={`w-4 h-4 ${field.color === 'purple' ? 'text-[#7c3aed]' : 'text-[#f47a4d]'}`} />
-                        </div>
-                        <span className="text-[13px] font-black text-gray-400 uppercase tracking-widest">{field.label}</span>
+                <form onSubmit={handleSaveProfile} className="space-y-6 max-w-[980px]">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    {[
+                      { key: 'first_name', label: 'First Name', value: profileForm.first_name },
+                      { key: 'last_name', label: 'Last Name', value: profileForm.last_name },
+                      { key: 'email', label: 'Email', value: profileForm.email, type: 'email' },
+                      { key: 'phone_number', label: 'Phone Number', value: profileForm.phone_number },
+                      { key: 'whatsapp_number', label: 'WhatsApp Number', value: profileForm.whatsapp_number },
+                      { key: 'organization_name', label: 'Organization Name', value: profileForm.organization_name },
+                      { key: 'city', label: 'City', value: profileForm.city },
+                      { key: 'state', label: 'State', value: profileForm.state },
+                      { key: 'pin_code', label: 'Pin Code', value: profileForm.pin_code },
+                      { key: 'gst_no', label: 'GST No.', value: profileForm.gst_no },
+                    ].map((field) => (
+                      <div key={field.key} className="bg-white border border-gray-100 rounded-[20px] p-5 shadow-sm">
+                        <span className="text-[12px] font-black text-gray-400 uppercase tracking-widest">{field.label}</span>
+                        <input
+                          type={field.type || 'text'}
+                          name={field.key}
+                          defaultValue={field.value}
+                          className="mt-3 w-full bg-gray-50 border-none rounded-[14px] px-4 py-3 text-[15px] font-semibold text-[#111827] focus:ring-2 focus:ring-purple-100 transition-all"
+                        />
                       </div>
-                      <input 
-                        type="text" 
-                        defaultValue={field.value} 
-                        className="w-full bg-gray-50 border-none rounded-[16px] px-6 py-4 text-[16px] font-bold text-[#111827] focus:ring-2 focus:ring-purple-100 transition-all" 
+                    ))}
+                    <div className="bg-white border border-gray-100 rounded-[20px] p-5 shadow-sm">
+                      <span className="text-[12px] font-black text-gray-400 uppercase tracking-widest">Customer Type</span>
+                      <select
+                        name="customer_type"
+                        defaultValue={profileForm.customer_type || 'general'}
+                        className="mt-3 w-full bg-gray-50 border-none rounded-[14px] px-4 py-3 text-[15px] font-semibold text-[#111827] focus:ring-2 focus:ring-purple-100 transition-all"
+                      >
+                        <option value="general">General</option>
+                        <option value="denter">Denter</option>
+                        <option value="painter">Painter</option>
+                        <option value="car_dealer">Car Dealer</option>
+                      </select>
+                    </div>
+                    <div className="md:col-span-2 bg-white border border-gray-100 rounded-[20px] p-5 shadow-sm">
+                      <span className="text-[12px] font-black text-gray-400 uppercase tracking-widest">Billing Address Line 1</span>
+                      <input
+                        type="text"
+                        name="billing_address_1"
+                        defaultValue={profileForm.billing_address_1}
+                        className="mt-3 w-full bg-gray-50 border-none rounded-[14px] px-4 py-3 text-[15px] font-semibold text-[#111827] focus:ring-2 focus:ring-purple-100 transition-all"
                       />
                     </div>
-                  ))}
+                    <div className="md:col-span-2 bg-white border border-gray-100 rounded-[20px] p-5 shadow-sm">
+                      <span className="text-[12px] font-black text-gray-400 uppercase tracking-widest">Billing Address Line 2</span>
+                      <input
+                        type="text"
+                        name="billing_address_2"
+                        defaultValue={profileForm.billing_address_2}
+                        className="mt-3 w-full bg-gray-50 border-none rounded-[14px] px-4 py-3 text-[15px] font-semibold text-[#111827] focus:ring-2 focus:ring-purple-100 transition-all"
+                      />
+                    </div>
+                  </div>
 
                   <div className="flex items-center space-x-4 pt-4">
-                    <button className="flex items-center px-10 py-5 bg-[#f47a4d] text-white rounded-[22px] font-black text-[15px] hover:bg-[#e66a3d] transition-all shadow-xl shadow-orange-100/50">
+                    <button type="submit" disabled={profileSubmitting} className="flex items-center px-10 py-5 bg-[#f47a4d] text-white rounded-[22px] font-black text-[15px] hover:bg-[#e66a3d] transition-all shadow-xl shadow-orange-100/50 disabled:opacity-60">
                       <RotateCcw className="w-4 h-4 mr-2.5" />
-                      Save Changes
+                      {profileSubmitting ? 'Saving...' : 'Save Changes'}
                     </button>
                     <button 
                       onClick={() => setProfileView('view')}
@@ -648,7 +1046,7 @@ const Account = () => {
                       Cancel
                     </button>
                   </div>
-                </div>
+                </form>
               </div>
             ) : (
               <div className="animate-in fade-in slide-in-from-left-4 duration-500">
@@ -766,54 +1164,198 @@ const Account = () => {
               <h2 className="text-[32px] font-serif font-bold text-[#111827] mb-2 tracking-tight">Garage</h2>
               <p className="text-gray-500 text-[18px]">Add your cars here to browse parts effortlessly.</p>
             </div>
+            {garageError && (
+              <div className="mb-6 rounded-[16px] border border-red-100 bg-red-50 px-5 py-3 text-[14px] font-semibold text-red-600">
+                {garageError}
+              </div>
+            )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-12">
-              {/* Vehicle Card 1 */}
-              <div className="group">
-                <div className="relative aspect-[16/10] bg-[#f3f4f6] rounded-[24px] mb-6 overflow-hidden">
-                  {/* Action Icons */}
-                  <div className="absolute top-6 right-6 flex items-center space-x-3">
-                    <button className="w-10 h-10 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center text-gray-600 hover:text-[#7c3aed] transition-all shadow-sm">
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button className="w-10 h-10 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center text-gray-600 hover:text-red-500 transition-all shadow-sm">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {/* Open Catalog Button */}
-                  <div className="absolute bottom-6 right-6">
-                    <button className="flex items-center px-5 py-2.5 bg-gray-200 text-[#111827] rounded-full text-[13px] font-black hover:bg-gray-300 transition-all">
-                      Open Catalog
-                      <ArrowRight className="w-4 h-4 ml-2" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Vehicle Details */}
-                <div className="flex items-start justify-between mb-6 pr-4">
-                  <div>
-                    <h3 className="text-[28px] font-black text-[#111827] leading-tight">BE6</h3>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[14px] font-bold text-gray-500">Electronic Vehicles</p>
-                    <p className="text-[14px] font-bold text-gray-500">Model Number: 2024</p>
-                  </div>
-                </div>
-
-                <button className="w-full py-4.5 bg-gray-200 text-[#111827] rounded-[14px] font-black text-[15px] hover:bg-gray-300 transition-all">
-                  Track Orders
+            {!profileExists && (
+              <div className="mb-8 rounded-[20px] border border-amber-200 bg-amber-50 px-6 py-5">
+                <p className="text-[14px] font-semibold text-amber-900">
+                  Please create a customer profile first before adding vehicles to your garage.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('Profile');
+                    setProfileView('edit');
+                  }}
+                  className="mt-3 px-6 py-2.5 bg-amber-600 text-white rounded-full text-[13px] font-bold hover:bg-amber-700"
+                >
+                  Create Customer Profile
                 </button>
               </div>
+            )}
 
-              {/* Add to Garage Card */}
-              <div className="aspect-[16/10] bg-[#f9fafb] border-2 border-dashed border-gray-100 rounded-[24px] flex items-center justify-center group cursor-pointer hover:border-[#7c3aed]/30 transition-all">
-                <button className="flex items-center px-8 py-3.5 bg-gray-200 text-[#111827] rounded-full text-[14px] font-black group-hover:bg-[#7c3aed] group-hover:text-white transition-all shadow-sm">
+            {showAddGarageForm && profileExists && (
+              <form onSubmit={handleAddGarageVehicle} className="mb-8 bg-white border border-gray-100 rounded-[24px] p-6 md:p-8 shadow-sm">
+                <h3 className="text-[20px] font-black text-[#111827] mb-6">Add Vehicle to Garage</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <select
+                    value={garageForm.car_maker}
+                    onChange={(e) => handleGarageFormChange('car_maker', e.target.value)}
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                    required
+                    title="car-maker"
+                  >
+                    <option value="">Select car maker</option>
+                    {garageMakers.map((maker) => (
+                      <option key={maker.id} value={maker.id}>{maker.name}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={garageForm.car_model}
+                    onChange={(e) => handleGarageFormChange('car_model', e.target.value)}
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                    required
+                    title="car-model"
+                    disabled={!garageForm.car_maker || garageModelsLoading}
+                  >
+                    <option value="">
+                      {garageModelsLoading ? 'Loading models...' : 'Select car model'}
+                    </option>
+                    {garageModels.map((model) => (
+                      <option key={model.id} value={model.id}>{model.name}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={garageForm.car_variant}
+                    onChange={(e) => handleGarageFormChange('car_variant', e.target.value)}
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                    title="car-variant"
+                    disabled={!garageForm.car_model || garageVariantsLoading}
+                  >
+                    <option value="">
+                      {garageVariantsLoading ? 'Loading variants...' : 'Select variant (optional)'}
+                    </option>
+                    {garageVariants.map((variant) => (
+                      <option key={variant.id} value={variant.id}>{variant.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min="1900"
+                    max="2100"
+                    value={garageForm.year}
+                    onChange={(e) => handleGarageFormChange('year', e.target.value)}
+                    placeholder="Year (optional)"
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                    disabled={!garageForm.car_model}
+                  />
+                  <input
+                    type="text"
+                    value={garageForm.vin}
+                    onChange={(e) => handleGarageFormChange('vin', e.target.value)}
+                    placeholder="VIN (optional)"
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                  />
+                  <input
+                    type="text"
+                    value={garageForm.type_engine}
+                    onChange={(e) => handleGarageFormChange('type_engine', e.target.value)}
+                    placeholder="Engine type (optional)"
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                  />
+                  <input
+                    type="text"
+                    value={garageForm.type_liters}
+                    onChange={(e) => handleGarageFormChange('type_liters', e.target.value)}
+                    placeholder="Engine liters (optional)"
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                  />
+                  <input
+                    type="url"
+                    value={garageForm.oem_brand_url}
+                    onChange={(e) => handleGarageFormChange('oem_brand_url', e.target.value)}
+                    placeholder="OEM brand URL (optional)"
+                    className="w-full rounded-[14px] border border-gray-200 px-4 py-3 text-[14px] font-semibold text-gray-700"
+                  />
+                </div>
+                {(garageModelsLoading || garageVariantsLoading) && (
+                  <p className="mt-3 text-[13px] font-semibold text-gray-500">
+                    {garageModelsLoading ? 'Loading models for selected maker...' : 'Loading variants for selected model...'}
+                  </p>
+                )}
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <button
+                    type="submit"
+                    disabled={garageSubmitting}
+                    className="px-8 py-3 bg-[#7c3aed] text-white rounded-full text-[14px] font-black hover:bg-[#6d28d9] disabled:opacity-60"
+                  >
+                    {garageSubmitting ? 'Adding...' : 'Save Vehicle'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddGarageForm(false);
+                      resetGarageForm();
+                    }}
+                    className="px-8 py-3 border border-gray-200 text-gray-600 rounded-full text-[14px] font-black hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-12">
+              {garageVehicles.map((vehicle) => (
+                <div key={vehicle.id} className="group">
+                  <div className="relative aspect-[16/10] bg-[#f3f4f6] rounded-[24px] mb-6 overflow-hidden">
+                    <div className="absolute top-6 right-6 flex items-center space-x-3">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteGarageVehicle(vehicle.id)}
+                        className="w-10 h-10 bg-white/80 backdrop-blur-sm rounded-full flex items-center justify-center text-gray-600 hover:text-red-500 transition-all shadow-sm"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="absolute bottom-6 right-6">
+                      <button className="flex items-center px-5 py-2.5 bg-gray-200 text-[#111827] rounded-full text-[13px] font-black hover:bg-gray-300 transition-all">
+                        Open Catalog
+                        <ArrowRight className="w-4 h-4 ml-2" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start justify-between mb-6 pr-4">
+                    <div>
+                      <h3 className="text-[24px] font-black text-[#111827] leading-tight">
+                        {vehicle?.car_maker_detail?.name || 'Unknown Maker'} {vehicle?.car_model_detail?.name || ''}
+                      </h3>
+                      {vehicle?.car_variant_detail?.name && (
+                        <p className="text-[14px] font-bold text-gray-500 mt-1">{vehicle.car_variant_detail.name}</p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[14px] font-bold text-gray-500">Year: {vehicle?.year || '-'}</p>
+                      <p className="text-[14px] font-bold text-gray-500">Engine: {vehicle?.type_engine || '-'}</p>
+                    </div>
+                  </div>
+
+                  <button className="w-full py-4.5 bg-gray-200 text-[#111827] rounded-[14px] font-black text-[15px] hover:bg-gray-300 transition-all">
+                    Track Orders
+                  </button>
+                </div>
+              ))}
+
+              <div className={`aspect-[16/10] bg-[#f9fafb] border-2 border-dashed rounded-[24px] flex items-center justify-center group transition-all ${profileExists ? 'border-gray-100 cursor-pointer hover:border-[#7c3aed]/30' : 'border-gray-200 cursor-not-allowed opacity-70'}`}>
+                <button
+                  type="button"
+                  onClick={() => profileExists && setShowAddGarageForm(true)}
+                  disabled={!profileExists}
+                  className="flex items-center px-8 py-3.5 bg-gray-200 text-[#111827] rounded-full text-[14px] font-black group-hover:bg-[#7c3aed] group-hover:text-white transition-all shadow-sm disabled:cursor-not-allowed"
+                >
                   <Plus className="w-4 h-4 mr-2" />
                   Add to Garage
                 </button>
               </div>
             </div>
+            {garageLoading && (
+              <p className="mt-6 text-[14px] font-semibold text-gray-500">Loading garage vehicles...</p>
+            )}
           </div>
         )}
 

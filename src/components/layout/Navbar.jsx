@@ -66,10 +66,10 @@ const Navbar = () => {
         {/* Right Side: Action Icons */}
         <div className="flex items-center space-x-8">
           {/* Garage Pill Button */}
-          <button className="hidden sm:flex items-center px-7 py-3 border border-gray-200 rounded-full hover:bg-gray-50 transition-all hover:shadow-md">
+          <Link to={auth.isAuthenticated ? '/account' : '/login'} className="hidden sm:flex items-center px-7 py-3 border border-gray-200 rounded-full hover:bg-gray-50 transition-all hover:shadow-md">
             <LayoutDashboard className="w-5 h-5 mr-3 text-gray-600" />
             <span className="text-[15px] font-bold text-gray-700">Garage</span>
-          </button>
+          </Link>
 
           <div className="flex items-center space-x-3">
             <Link to="/cart" className="relative p-3 text-gray-700 hover:text-blue-600 transition-colors">

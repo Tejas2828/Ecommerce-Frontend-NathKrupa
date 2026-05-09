@@ -1,4 +1,6 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import MainLayout from './components/layout/MainLayout';
 import Home from './pages/Home';
 import VehicleSearchResults from './pages/VehicleSearchResults';
@@ -10,9 +12,20 @@ import OEMModelSelect from './pages/OEMModelSelect';
 import Account from './pages/Account';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import { setActiveCartUser } from './store/slices/cartSlice';
 import './App.css';
 
 function App() {
+  const dispatch = useDispatch();
+  const auth = useSelector((state) => state.auth);
+
+  useEffect(() => {
+    const userKey = auth?.isAuthenticated
+      ? auth?.user?.email || auth?.user?.username || 'guest'
+      : 'guest';
+    dispatch(setActiveCartUser(userKey));
+  }, [dispatch, auth?.isAuthenticated, auth?.user?.email, auth?.user?.username]);
+
   return (
     <Router>
       <MainLayout>

@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useDispatch } from 'react-redux';
 import { fetchProductInfo, resolveApiMediaUrl } from '../api/shop';
 import { formatProductPrice } from '../utils/productFormat';
+import { addItemToCart } from '../store/slices/cartSlice';
 
 export default function ProductDetails() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const dispatch = useDispatch();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -96,6 +100,19 @@ export default function ProductDetails() {
     { label: 'COD', value: data.is_cod ? 'Available' : 'Not available' },
     { label: 'Bulk Order', value: data.bulk_order_available ? 'Available' : 'Not available' },
   ].filter((row) => row.value);
+
+  const handleAddToCart = () => {
+    const numericPrice = Number(data.price_inclusive_tax ?? data.discounted_price ?? data.price ?? 0);
+    dispatch(
+      addItemToCart({
+        id: data.product_id,
+        price: Number.isFinite(numericPrice) ? numericPrice : 0,
+        title: data.title || 'Untitled product',
+        image: resolveApiMediaUrl(data.image),
+      })
+    );
+    navigate('/cart');
+  };
 
   return (
     <div className="max-w-[1280px] mx-auto px-6 py-10 font-sans">
@@ -194,6 +211,15 @@ export default function ProductDetails() {
               {data.description}
             </div>
           )}
+          <div className="mb-8">
+            <button
+              type="button"
+              onClick={handleAddToCart}
+              className="px-8 py-3 rounded-full bg-[#f47a4d] text-white font-black text-sm hover:bg-[#e46d41] transition-all"
+            >
+              Add to Cart
+            </button>
+          </div>
 
           {detailItems.length > 0 && (
             <div className="border-t border-gray-100 pt-8">

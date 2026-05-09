@@ -25,6 +25,8 @@ const CAR_MODELS_PATH = '/api/shop/shop/car-models-readonly/';
 const CAR_YEARS_PATH = '/api/shop/shop/car-years/';
 const CAR_VARIANTS_PATH = '/api/shop/shop/car-variants/';
 const COMPATIBILITY_GROUPS_PATH = '/api/shop/shop/compatibility-groups-readonly/';
+const USER_GARAGE_PATH = '/api/shop/shop/client/user-garage/';
+const CUSTOMER_PROFILE_PATH = '/api/shop/shop/client/customer-profile/';
 
 /**
  * @param {{ page?: number, pageSize?: number, search?: string }} [opts]
@@ -174,4 +176,95 @@ export async function fetchCarVariants(modelId, year) {
   if (year) params.set('year', String(year));
   const url = `${API_BASE_URL}${CAR_VARIANTS_PATH}?${params.toString()}`;
   return fetchJson(url);
+}
+
+function toErrorMessage(payload, fallback) {
+  if (!payload) return fallback;
+  if (typeof payload === 'string') return payload;
+  if (payload.message) return String(payload.message);
+  if (payload.error) return String(payload.error);
+  if (payload.detail) return String(payload.detail);
+  const firstField = Object.values(payload)[0];
+  if (Array.isArray(firstField) && firstField.length) return String(firstField[0]);
+  if (typeof firstField === 'string') return firstField;
+  return fallback;
+}
+
+async function fetchJsonWithAuth(url, accessToken, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      ...(options.headers || {}),
+    },
+  });
+  const text = await res.text().catch(() => '');
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = text;
+  }
+  if (!res.ok) {
+    throw new Error(toErrorMessage(payload, `Request failed (${res.status})`));
+  }
+  return payload;
+}
+
+/**
+ * Get current user's garage vehicles.
+ * Returns plain vehicle array for easier UI use.
+ */
+export async function fetchUserGarageVehicles(accessToken) {
+  const payload = await fetchJsonWithAuth(`${API_BASE_URL}${USER_GARAGE_PATH}`, accessToken);
+  return Array.isArray(payload?.data) ? payload.data : [];
+}
+
+/**
+ * Add a vehicle to current user's garage.
+ */
+export async function createUserGarageVehicle(accessToken, vehiclePayload) {
+  const payload = await fetchJsonWithAuth(`${API_BASE_URL}${USER_GARAGE_PATH}`, accessToken, {
+    method: 'POST',
+    body: JSON.stringify(vehiclePayload),
+  });
+  return payload?.data || payload;
+}
+
+/**
+ * Remove a vehicle from current user's garage.
+ */
+export async function deleteUserGarageVehicle(accessToken, vehicleId) {
+  return fetchJsonWithAuth(`${API_BASE_URL}${USER_GARAGE_PATH}${vehicleId}/`, accessToken, {
+    method: 'DELETE',
+    headers: {},
+  });
+}
+
+/**
+ * Get current authenticated user's customer profile.
+ */
+export async function fetchCustomerProfile(accessToken) {
+  return fetchJsonWithAuth(`${API_BASE_URL}${CUSTOMER_PROFILE_PATH}`, accessToken);
+}
+
+/**
+ * Create customer profile for current authenticated user.
+ */
+export async function createCustomerProfile(accessToken, profilePayload) {
+  return fetchJsonWithAuth(`${API_BASE_URL}${CUSTOMER_PROFILE_PATH}`, accessToken, {
+    method: 'POST',
+    body: JSON.stringify(profilePayload),
+  });
+}
+
+/**
+ * Update customer profile for current authenticated user.
+ */
+export async function updateCustomerProfile(accessToken, profilePayload) {
+  return fetchJsonWithAuth(`${API_BASE_URL}${CUSTOMER_PROFILE_PATH}`, accessToken, {
+    method: 'PATCH',
+    body: JSON.stringify(profilePayload),
+  });
 }

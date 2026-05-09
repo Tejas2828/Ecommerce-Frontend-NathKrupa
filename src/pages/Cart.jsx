@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import { Minus, Plus, X, ArrowRight, ShoppingCart, MapPin, ClipboardList, CreditCard, Banknote, ShieldCheck, Truck, CheckCircle2, Mail, Package, Download, Calendar, ExternalLink } from 'lucide-react';
+import { addItemToCart, removeItemFromCart } from '../store/slices/cartSlice';
 
 const Cart = () => {
+  const dispatch = useDispatch();
+  const cartItems = useSelector((state) => state.cart.items);
+  const cartTotalAmount = useSelector((state) => state.cart.totalAmount);
   const [step, setStep] = useState(1); // 1: Cart, 2: Address, 3: Review, 4: Payment
   const [showAddressModal, setShowAddressModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
@@ -24,41 +29,9 @@ const Cart = () => {
   const [selectedBank, setSelectedBank] = useState('hdfc');
   const [isAgreed, setIsAgreed] = useState(false);
 
-  const cartItems = [
-    {
-      id: 1,
-      name: 'Engine Oil Filter',
-      brand: 'Mann+Hummel India',
-      price: 1765,
-      mrp: 3530,
-      discount: '50% OFF',
-      quantity: 2,
-      pincode: '411006',
-      image: 'https://img.freepik.com/free-photo/car-parts-isolated-white-background_1232-4028.jpg'
-    },
-    {
-      id: 2,
-      name: 'Engine Oil Filter',
-      brand: 'Mann+Hummel India',
-      price: 1765,
-      mrp: 3530,
-      discount: '50% OFF',
-      quantity: 2,
-      pincode: '411006',
-      image: 'https://img.freepik.com/free-photo/car-parts-isolated-white-background_1232-4028.jpg'
-    },
-    {
-      id: 3,
-      name: 'Engine Oil Filter',
-      brand: 'Mann+Hummel India',
-      price: 1765,
-      mrp: 3530,
-      discount: '50% OFF',
-      quantity: 2,
-      pincode: '411006',
-      image: 'https://img.freepik.com/free-photo/car-parts-isolated-white-background_1232-4028.jpg'
-    }
-  ];
+  const deliveryCharge = cartItems.length ? 200 : 0;
+  const platformFee = cartItems.length ? 250 : 0;
+  const toPay = cartTotalAmount + deliveryCharge + platformFee;
 
   const addresses = [
     {
@@ -155,36 +128,33 @@ const Cart = () => {
                       {/* Product Info */}
                       <div className="text-center md:text-left mt-2 md:mt-0">
                         <div className="flex flex-col md:flex-row md:items-center mb-2 md:mb-3">
-                          <span className="text-[20px] md:text-[24px] font-black text-[#111827] md:mr-4 leading-none">Rs.{item.price.toLocaleString()}</span>
+                        <span className="text-[20px] md:text-[24px] font-black text-[#111827] md:mr-4 leading-none">Rs.{Number(item.price || 0).toLocaleString()}</span>
                           <div className="flex items-center justify-center md:justify-start space-x-3 mt-2 md:mt-0">
-                            <span className="text-[11px] md:text-[12px] text-gray-400 line-through">MRP: RS.{item.mrp.toLocaleString()}</span>
-                            <span className="bg-[#7c3aed] text-white text-[9px] md:text-[10px] font-black px-2 md:px-2.5 py-1 rounded-[6px] uppercase tracking-wide">
-                              {item.discount}
-                            </span>
+                            <span className="text-[11px] md:text-[12px] text-gray-400">Qty x Price</span>
                           </div>
                         </div>
                         <h3 className="text-[15px] md:text-[17px] font-bold text-gray-900 mb-1 leading-tight">{item.name}</h3>
-                        <p className="text-[12px] md:text-[13px] font-medium text-gray-400 tracking-tight">{item.brand}</p>
+                        <p className="text-[12px] md:text-[13px] font-medium text-gray-400 tracking-tight">Product ID: {item.id}</p>
                       </div>
                     </div>
 
                     {/* Delivery Info */}
                     <div className="mt-8 md:mt-0 md:px-12 text-center md:text-left border-gray-50 md:border-x px-10">
-                      <p className="text-[14px] font-bold text-gray-700 mb-1">Delivers to {item.pincode}</p>
+                      <p className="text-[14px] font-bold text-gray-700 mb-1">Delivers to your default address</p>
                       <p className="text-[12px] font-black text-emerald-500 uppercase tracking-widest">Free Delivery</p>
                     </div>
 
                     {/* Remove & Quantity */}
                     <div className="mt-8 md:mt-0 flex flex-col items-center md:items-end min-w-[120px]">
-                      <button className="text-[12px] font-bold text-gray-400 hover:text-red-500 transition-colors mb-6 flex items-center">
+                      <button onClick={() => dispatch(removeItemFromCart(item.id))} className="text-[12px] font-bold text-gray-400 hover:text-red-500 transition-colors mb-6 flex items-center">
                         <span className="mb-0.5">Remove</span>
                       </button>
                       <div className="flex items-center bg-gray-50 rounded-xl p-1 border border-gray-100/50">
-                        <button className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-900 transition-colors">
+                        <button onClick={() => dispatch(removeItemFromCart(item.id))} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-900 transition-colors">
                           <Minus className="w-4 h-4" />
                         </button>
                         <span className="w-10 text-center text-[18px] font-black text-gray-900">{item.quantity}</span>
-                        <button className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-900 transition-colors">
+                        <button onClick={() => dispatch(addItemToCart({ id: item.id, price: item.price, title: item.name, image: item.image }))} className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-900 transition-colors">
                           <Plus className="w-4 h-4" />
                         </button>
                       </div>
@@ -204,6 +174,7 @@ const Cart = () => {
               </Link>
               <button 
                 onClick={() => setStep(2)}
+                disabled={!cartItems.length}
                 className="group px-12 py-4 bg-[#f47a4d] text-white rounded-full font-black text-[15px] hover:bg-[#ff8a5e] hover:shadow-orange-200 transition-all shadow-xl shadow-orange-100 flex items-center justify-center w-full md:w-auto"
               >
                 Proceed to buy
@@ -303,21 +274,21 @@ const Cart = () => {
                   <div className="space-y-5 mb-8">
                     <div className="flex justify-between items-center text-[15px] font-bold text-gray-600">
                       <span>Cart Subtotal</span>
-                      <span className="text-gray-900 font-black">₹ 5,467</span>
+                      <span className="text-gray-900 font-black">₹ {cartTotalAmount.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between items-center text-[15px] font-bold text-gray-600">
                       <span>Delivery Charge</span>
-                      <span className="text-gray-900 font-black">₹ 200</span>
+                      <span className="text-gray-900 font-black">₹ {deliveryCharge.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between items-center text-[15px] font-bold text-gray-600">
                       <span>Platform Fee</span>
-                      <span className="text-gray-900 font-black">₹ 250</span>
+                      <span className="text-gray-900 font-black">₹ {platformFee.toLocaleString()}</span>
                     </div>
                   </div>
                   <div className="h-[1.5px] bg-gray-50 mb-8"></div>
                   <div className="bg-orange-50/50 rounded-[24px] px-8 py-6 flex justify-between items-center">
                     <span className="text-[20px] font-black text-[#111827]">To Pay</span>
-                    <span className="text-[22px] font-black text-[#f47a4d]">₹ 5,917</span>
+                    <span className="text-[22px] font-black text-[#f47a4d]">₹ {toPay.toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -663,15 +634,15 @@ const Cart = () => {
                   <div className="space-y-6 mb-10">
                     <div className="flex justify-between items-center text-[15px] font-medium text-gray-400">
                       <span>Cart Subtotal :</span>
-                      <span className="text-gray-900 font-bold tracking-tight">₹ 5,467</span>
+                      <span className="text-gray-900 font-bold tracking-tight">₹ {cartTotalAmount.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between items-center text-[15px] font-medium text-gray-400">
                       <span>Delivery Charge :</span>
-                      <span className="text-gray-900 font-bold tracking-tight">₹ {selectedPayment === 'cod' ? '0' : '200'}</span>
+                      <span className="text-gray-900 font-bold tracking-tight">₹ {selectedPayment === 'cod' ? '0' : deliveryCharge.toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between items-center text-[15px] font-medium text-gray-400">
                       <span>Platform Fee :</span>
-                      <span className="text-gray-900 font-bold tracking-tight">₹ 250</span>
+                      <span className="text-gray-900 font-bold tracking-tight">₹ {platformFee.toLocaleString()}</span>
                     </div>
                   </div>
 
@@ -679,7 +650,7 @@ const Cart = () => {
 
                   <div className="flex justify-between items-center mb-10">
                     <span className="text-[20px] font-black text-[#111827]">To Pay</span>
-                    <span className="text-[24px] font-black text-[#111827]">₹ {selectedPayment === 'cod' ? '5,717' : '5,917'}</span>
+                    <span className="text-[24px] font-black text-[#111827]">₹ {(selectedPayment === 'cod' ? cartTotalAmount + platformFee : toPay).toLocaleString()}</span>
                   </div>
 
                   <button 
@@ -831,7 +802,7 @@ const Cart = () => {
                           <p className="text-[13px] md:text-[14px] font-black text-[#111827] leading-tight mb-1">{item.name}</p>
                           <p className="text-[11px] md:text-[12px] font-bold text-gray-400">Qty: {item.quantity}</p>
                         </div>
-                        <span className="text-[14px] md:text-[15px] font-black text-[#111827]">₹ {(item.price * item.quantity).toLocaleString()}</span>
+                        <span className="text-[14px] md:text-[15px] font-black text-[#111827]">₹ {(Number(item.price || 0) * item.quantity).toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
@@ -840,7 +811,7 @@ const Cart = () => {
 
                   <div className="flex justify-between items-center">
                     <span className="text-[18px] md:text-[20px] font-black text-[#111827]">Total Amount</span>
-                    <span className="text-[20px] md:text-[22px] font-black text-[#f47a4d]">₹ 5,917</span>
+                    <span className="text-[20px] md:text-[22px] font-black text-[#f47a4d]">₹ {toPay.toLocaleString()}</span>
                   </div>
                 </div>
 
