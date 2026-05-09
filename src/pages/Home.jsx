@@ -196,7 +196,7 @@ const Home = () => {
               </div>
             </div>
             
-            <h1 className="text-[58px] font-serif font-bold text-[#f47a4d] leading-[1.1] tracking-tight">
+            <h1 className="text-[32px] sm:text-[42px] md:text-[58px] font-serif font-bold text-[#f47a4d] leading-[1.1] tracking-tight text-center lg:text-left">
               Find Vehicle Parts
             </h1>
           </div>
@@ -499,12 +499,12 @@ const Home = () => {
 
         {/* Recently Viewed Section */}
         <div className="pt-20 border-t border-gray-100 mt-20">
-          <div className="flex justify-between items-end mb-10 px-2">
-            <div>
-              <h2 className="text-[32px] font-bold text-[#111827] leading-tight">Recently Viewed</h2>
-              <p className="text-[#6b7280] text-base font-medium">Parts Viewed by you recently</p>
+          <div className="flex flex-col sm:flex-row justify-between items-center sm:items-end mb-8 md:mb-10 px-2 gap-4">
+            <div className="text-center sm:text-left">
+              <h2 className="text-[24px] md:text-[32px] font-bold text-[#111827] leading-tight">Recently Viewed</h2>
+              <p className="text-[#6b7280] text-sm md:text-base font-medium">Parts Viewed by you recently</p>
             </div>
-            <button className="text-[#f47a4d] text-base font-black hover:underline underline-offset-8 transition-colors">See All</button>
+            <button className="text-[#f47a4d] text-sm md:text-base font-black hover:underline underline-offset-8 transition-colors">See All</button>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-6">
@@ -537,14 +537,106 @@ const Home = () => {
           </div>
         </div>
 
+        {/* Shop by Manufacturer Section */}
+        <div className="pt-12 md:pt-20 border-t border-gray-100 mt-12 md:mt-20">
+          <div className="flex flex-col sm:flex-row justify-between items-center sm:items-end mb-8 md:mb-10 px-2 gap-4">
+            <div className="text-center sm:text-left">
+              <h2 className="text-[24px] md:text-[32px] font-bold text-[#111827] leading-tight">Vehicle Manufacturers</h2>
+              <p className="text-[#6b7280] text-sm md:text-base font-medium">Original parts from your favorite brands</p>
+            </div>
+            <button className="text-[#f47a4d] text-sm md:text-base font-black hover:underline underline-offset-8 transition-colors">See All Brands</button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 md:gap-6">
+            {[
+              { name: "Maruti Suzuki", logo: "https://1000logos.net/wp-content/uploads/2022/08/Maruti-Suzuki-Logo.png" },
+              { name: "Hyundai", logo: "https://upload.wikimedia.org/wikipedia/commons/4/44/Hyundai_Motor_Company_logo.svg" },
+              { name: "Tata Motors", logo: "https://1000logos.net/wp-content/uploads/2020/04/Tata-Logo-768x432.png" },
+              { name: "Mahindra", logo: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/82/Mahindra_Auto.png/1920px-Mahindra_Auto.png" },
+              { name: "Toyota", logo: "https://upload.wikimedia.org/wikipedia/commons/9/9d/Toyota_carlogo.svg" },
+              { name: "Honda", logo: "https://static.vecteezy.com/system/resources/previews/036/459/363/non_2x/honda-car-logo-illustration-free-vector.jpg" }
+            ].map((m) => (
+              <div key={m.name} className="group cursor-pointer">
+                <div className="bg-white border border-gray-100 rounded-[24px] p-5 md:p-8 flex flex-col items-center justify-center transition-all duration-500 group-hover:border-[#f47a4d]/30 group-hover:shadow-2xl group-hover:shadow-orange-100/50 group-hover:-translate-y-1">
+                  <div className="w-20 h-14 md:w-32 md:h-20 mb-4 flex items-center justify-center transition-all duration-500">
+                    <img 
+                      src={m.logo} 
+                      alt={m.name} 
+                      className="max-w-full max-h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity duration-300" 
+                    />
+                  </div>
+                  <span className="text-[12px] md:text-[15px] font-black text-gray-400 group-hover:text-[#111827] transition-colors tracking-tight text-center">
+                    {m.name}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Component Brands Section */}
+        <div className="pt-12 md:pt-20 border-t border-gray-100 mt-12 md:mt-20">
+          <div className="flex flex-col sm:flex-row justify-between items-center sm:items-end mb-8 md:mb-10 px-2 gap-4">
+            <div className="text-center sm:text-left">
+              <h2 className="text-[24px] md:text-[32px] font-bold text-[#111827] leading-tight">Top Component Brands</h2>
+              <p className="text-[#6b7280] text-sm md:text-base font-medium">Quality assurance from world-class manufacturers</p>
+            </div>
+            <button className="text-[#f47a4d] text-sm md:text-base font-black hover:underline underline-offset-8 transition-colors">Explore All</button>
+          </div>
+
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3 md:gap-4">
+            {[
+              { name: "Lumax", image: "https://www.lumaxworld.in/aftermarket/images/main-logo.svg" },
+              { name: "Uno Minda", image: "https://www.unominda.com/images/logo.png" },
+              { name: "TVS - Wilgo", image: "https://www.logo.wine/a/logo/TVS_Motor_Company/TVS_Motor_Company-Logo.wine.svg" },
+              { name: "Accutate", image: "" },
+              { name: "Auto Gold", image: "" },
+              { name: "Valeo", image: "https://www.valeo.com/wp-content/themes/valeo/images/logo.png" },
+              { name: "Mahindra Genuine", image: "https://upload.wikimedia.org/wikipedia/commons/e/e0/Mahindra_logo.svg" },
+              { name: "Hella", image: "https://www.motrparts.com/wp-content/uploads/2022/02/hella-auto-parts-scaled.jpeg" },
+              { name: "Galio", image: "https://media.licdn.com/dms/image/v2/C560BAQE49Nnqyy7-qw/company-logo_200_200/company-logo_200_200/0/1630604188185/galio_india_logo?e=2147483647&v=beta&t=f4NkniCyGXkkn9nH5IJatYC2Eo-ufzwO5LBgTodDoJw" },
+              { name: "Sandhar", image: "" },
+              { name: "Spark Minda", image: "" },
+              { name: "DKMax", image: "" },
+              { name: "Motherson", image: "" },
+              { name: "Philips", image: "https://1000logos.net/wp-content/uploads/2017/05/Phillips-Logo.png" },
+              { name: "ASN", image: "" },
+              { name: "Bosch", image: "https://www.logo.wine/a/logo/Robert_Bosch_GmbH/Robert_Bosch_GmbH-Logo.wine.svg" },
+              { name: "Stable", image: "" },
+              { name: "Radhe", image: "" },
+              { name: "Devi", image: "" },
+              { name: "Acian", image: "" },
+              { name: "Kobra", image: "" },
+              { name: "JPT", image: "https://www.jptglobalautomotive.com/wp-content/uploads/2025/12/logo-2.png" },
+              { name: "Suprajit", image: "https://5.imimg.com/data5/AF/HA/MY-73743/suprajit-two-wheeler-spare-parts-3-1000x1000.jpg" }
+            ].map((brand) => (
+              <div key={brand.name} className="cursor-pointer group">
+                <div className="aspect-[3/2] bg-white border border-gray-100 rounded-xl md:rounded-[24px] flex items-center justify-center p-3 md:p-6 transition-all duration-500 group-hover:border-[#f47a4d]/30 group-hover:shadow-xl group-hover:shadow-orange-100/40 group-hover:-translate-y-1 overflow-hidden">
+                  {brand.image ? (
+                    <img 
+                      src={brand.image} 
+                      alt={brand.name} 
+                      className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-all duration-300" 
+                    />
+                  ) : (
+                    <span className="text-[11px] md:text-[14px] font-black text-gray-400 group-hover:text-[#111827] transition-colors text-center uppercase tracking-tighter leading-none px-1">
+                      {brand.name}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Thought Section Carousel */}
         <div className="pt-20 border-t border-gray-100 mt-20 mb-32">
           <div className="relative bg-[#f9fafb] rounded-[32px] p-20 min-h-[300px] flex flex-col items-center justify-center overflow-hidden">
             <div className="text-center transition-all duration-700 ease-in-out">
-              <h2 className="text-[32px] md:text-[40px] font-black text-[#f47a4d] mb-6 leading-tight max-w-[800px] mx-auto">
+              <h2 className="text-[20px] sm:text-[28px] md:text-[40px] font-black text-[#f47a4d] mb-4 md:mb-6 leading-tight max-w-[800px] mx-auto">
                 {thoughts[currentThought].quote}
               </h2>
-              <p className="text-gray-400 text-sm font-medium tracking-wide uppercase">
+              <p className="text-gray-400 text-[10px] md:text-sm font-medium tracking-wide uppercase">
                 {thoughts[currentThought].author}
               </p>
             </div>

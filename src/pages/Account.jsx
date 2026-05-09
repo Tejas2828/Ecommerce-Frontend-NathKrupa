@@ -396,7 +396,7 @@ const Account = () => {
         {/* Header */}
         <div className="mb-12 flex justify-between items-end">
           <div>
-            <h1 className="text-[42px] font-serif font-bold text-[#111827] mb-2 tracking-tight">My Account</h1>
+            <h1 className="text-[28px] md:text-[42px] font-serif font-bold text-[#111827] mb-2 tracking-tight">My Account</h1>
             <p className="text-gray-400 text-lg">Manage all your details at one place.</p>
           </div>
           <button 
