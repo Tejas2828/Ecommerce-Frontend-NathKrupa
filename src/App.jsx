@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import MainLayout from './components/layout/MainLayout';
 import Home from './pages/Home';
+import CategoryBrowse from './pages/CategoryBrowse';
 import VehicleSearchResults from './pages/VehicleSearchResults';
 import ProductList from './pages/ProductList';
 import ProductDetails from './pages/ProductDetails';
@@ -31,6 +32,8 @@ function App() {
       <MainLayout>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/categories" element={<CategoryBrowse />} />
+          <Route path="/categories/:categoryId" element={<CategoryBrowse />} />
           <Route path="/vehicle-parts" element={<VehicleSearchResults />} />
           <Route path="/products" element={<ProductList />} />
           <Route path="/products/:id" element={<ProductDetails />} />
