@@ -1,16 +1,71 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Minus, Plus, X, ArrowRight, ShoppingCart, MapPin, ClipboardList, CreditCard, Banknote, ShieldCheck, Truck, CheckCircle2, Mail, Package, Download, Calendar, ExternalLink } from 'lucide-react';
-import { addItemToCart, removeItemFromCart } from '../store/slices/cartSlice';
+import { addItemToCart, removeItemFromCart, clearCart } from '../store/slices/cartSlice';
+import {
+  syncShopOrderCart,
+  fetchShippingAddresses,
+  createShippingAddress,
+  updateShippingAddress,
+  deleteShippingAddress,
+  assignShippingAddressToOrder,
+  placeShopOrder,
+} from '../api/shop';
+
+const PAYMENT_MODE_BY_UI = {
+  cod: 'COD',
+  upi: 'ONLINE',
+  card: 'ONLINE',
+  banking: 'ONLINE',
+};
+
+function mapApiAddress(a) {
+  const name = [a.first_name, a.last_name].filter(Boolean).join(' ').trim();
+  const line = [a.apartment_address, a.street_address, a.city, a.state, a.country, a.zip]
+    .filter(Boolean)
+    .join(', ');
+  return {
+    id: a.id,
+    label: (a.label || '').trim() || 'Address',
+    name: name || '—',
+    phone: a.mobile_no || '',
+    address: line,
+    raw: a,
+  };
+}
+
+const emptyAddressForm = {
+  label: '',
+  first_name: '',
+  last_name: '',
+  mobile_no: '',
+  apartment_address: '',
+  street_address: '',
+  city: '',
+  state: '',
+  country: 'India',
+  zip: '',
+  default: true,
+};
 
 const Cart = () => {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const cartItems = useSelector((state) => state.cart.items);
   const cartTotalAmount = useSelector((state) => state.cart.totalAmount);
+  const accessToken = useSelector((state) => state.auth?.tokens?.access);
+  const isAuthenticated = useSelector((state) => state.auth?.isAuthenticated);
   const [step, setStep] = useState(1); // 1: Cart, 2: Address, 3: Review, 4: Payment
   const [showAddressModal, setShowAddressModal] = useState(false);
   const [modalMode, setModalMode] = useState('add'); // 'add' or 'edit'
+  const [editingAddressId, setEditingAddressId] = useState(null);
+  const [addressForm, setAddressForm] = useState(emptyAddressForm);
+  const [addressFormSubmitting, setAddressFormSubmitting] = useState(false);
+  const [addresses, setAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
+  const [addressLoading, setAddressLoading] = useState(false);
+  const [addressError, setAddressError] = useState(null);
   const [selectedPayment, setSelectedPayment] = useState('upi');
   
   const banks = [
@@ -28,20 +83,53 @@ const Cart = () => {
 
   const [selectedBank, setSelectedBank] = useState('hdfc');
   const [isAgreed, setIsAgreed] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [placeOrderError, setPlaceOrderError] = useState(null);
+  const [placedOrder, setPlacedOrder] = useState(null);
 
   const deliveryCharge = cartItems.length ? 200 : 0;
   const platformFee = cartItems.length ? 250 : 0;
   const toPay = cartTotalAmount + deliveryCharge + platformFee;
 
-  const addresses = [
-    {
-      id: 1,
-      label: 'Shop',
-      name: 'Sarthak Kudale',
-      phone: '9172049840',
-      address: 'Moshi Dehu Road, MAHARASHTRA, Pune, 412105'
-    }
-  ];
+  const selectedAddress = addresses.find((x) => x.id === selectedAddressId) || null;
+
+  useEffect(() => {
+    if (step !== 2) return undefined;
+    let cancelled = false;
+    (async () => {
+      if (!accessToken) {
+        setAddresses([]);
+        setSelectedAddressId(null);
+        return;
+      }
+      setAddressLoading(true);
+      setAddressError(null);
+      try {
+        if (cartItems.length > 0) {
+          await syncShopOrderCart(accessToken, cartItems);
+        }
+        const list = await fetchShippingAddresses(accessToken);
+        if (cancelled) return;
+        const mapped = list.map((a) => mapApiAddress(a));
+        setAddresses(mapped);
+        const def = list.find((x) => x.default) || list[0];
+        const nextId = def?.id ?? null;
+        setSelectedAddressId(nextId);
+        if (nextId) {
+          await assignShippingAddressToOrder(accessToken, nextId).catch((e) => {
+            if (!cancelled) setAddressError(e.message || 'Could not link address to order.');
+          });
+        }
+      } catch (e) {
+        if (!cancelled) setAddressError(e.message || 'Could not load addresses.');
+      } finally {
+        if (!cancelled) setAddressLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, accessToken, cartItems]);
 
   const steps = [
     { id: 1, name: 'Cart', icon: ShoppingCart },
@@ -57,15 +145,158 @@ const Cart = () => {
     { id: 'cod', label: 'Cash On Delivery' }
   ];
 
-  const handleEditAddress = (addr) => {
+  const handleEditAddress = (e, addr) => {
+    e.stopPropagation();
     setModalMode('edit');
+    setEditingAddressId(addr.id);
+    const r = addr.raw || {};
+    setAddressForm({
+      label: r.label || '',
+      first_name: r.first_name || '',
+      last_name: r.last_name || '',
+      mobile_no: r.mobile_no || '',
+      apartment_address: r.apartment_address || '',
+      street_address: r.street_address || '',
+      city: r.city || '',
+      state: r.state || '',
+      country: r.country || 'India',
+      zip: r.zip || '',
+      default: Boolean(r.default),
+    });
     setShowAddressModal(true);
   };
 
   const handleAddAddress = () => {
     setModalMode('add');
+    setEditingAddressId(null);
+    setAddressForm(emptyAddressForm);
     setShowAddressModal(true);
   };
+
+  const handleSelectAddress = async (addr) => {
+    if (!accessToken) return;
+    setSelectedAddressId(addr.id);
+    setAddressError(null);
+    try {
+      await assignShippingAddressToOrder(accessToken, addr.id);
+    } catch (err) {
+      setAddressError(err.message || 'Could not use this address.');
+    }
+  };
+
+  const handleDeleteAddress = async (e, addr) => {
+    e.stopPropagation();
+    if (!accessToken) return;
+    if (!window.confirm('Remove this address from your account?')) return;
+    setAddressError(null);
+    try {
+      await deleteShippingAddress(accessToken, addr.id);
+      const list = await fetchShippingAddresses(accessToken);
+      const mapped = list.map((a) => mapApiAddress(a));
+      setAddresses(mapped);
+      const def = list.find((x) => x.default) || list[0];
+      const nextId = def?.id ?? null;
+      setSelectedAddressId(nextId);
+      if (nextId) {
+        await assignShippingAddressToOrder(accessToken, nextId);
+      }
+    } catch (err) {
+      setAddressError(err.message || 'Could not delete address.');
+    }
+  };
+
+  const handleAddressFormChange = (field, value) => {
+    setAddressForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSaveAddressModal = async (e) => {
+    e.preventDefault();
+    if (!accessToken) return;
+    setAddressFormSubmitting(true);
+    setAddressError(null);
+    const body = {
+      label: addressForm.label.trim(),
+      first_name: addressForm.first_name.trim(),
+      last_name: addressForm.last_name.trim(),
+      mobile_no: addressForm.mobile_no.trim(),
+      apartment_address: addressForm.apartment_address.trim(),
+      street_address: addressForm.street_address.trim(),
+      city: addressForm.city.trim(),
+      state: addressForm.state.trim(),
+      country: addressForm.country.trim() || 'India',
+      zip: addressForm.zip.trim(),
+      default: addressForm.default,
+      assign_to_cart: true,
+    };
+    try {
+      if (modalMode === 'edit' && editingAddressId != null) {
+        await updateShippingAddress(accessToken, editingAddressId, body);
+      } else {
+        await createShippingAddress(accessToken, body);
+      }
+      if (cartItems.length > 0) {
+        await syncShopOrderCart(accessToken, cartItems);
+      }
+      const list = await fetchShippingAddresses(accessToken);
+      const mapped = list.map((a) => mapApiAddress(a));
+      setAddresses(mapped);
+      const newest = modalMode === 'add' ? mapped[mapped.length - 1] : mapped.find((x) => x.id === editingAddressId);
+      if (newest?.id) {
+        setSelectedAddressId(newest.id);
+        await assignShippingAddressToOrder(accessToken, newest.id);
+      }
+      setShowAddressModal(false);
+    } catch (err) {
+      setAddressError(err.message || 'Could not save address.');
+    } finally {
+      setAddressFormSubmitting(false);
+    }
+  };
+
+  const handlePlaceOrder = async () => {
+    if (placingOrder) return;
+    if (!accessToken) {
+      setPlaceOrderError('Please sign in to place this order.');
+      return;
+    }
+    if (!cartItems.length) {
+      setPlaceOrderError('Your cart is empty.');
+      return;
+    }
+    if (!selectedAddress) {
+      setPlaceOrderError('Select a delivery address before placing the order.');
+      setStep(2);
+      return;
+    }
+    setPlacingOrder(true);
+    setPlaceOrderError(null);
+    try {
+      // Re-sync cart in case quantities changed since the address step,
+      // re-link the address, then place the order.
+      await syncShopOrderCart(accessToken, cartItems);
+      await assignShippingAddressToOrder(accessToken, selectedAddress.id);
+      const computedShipping = selectedPayment === 'cod' ? 0 : deliveryCharge;
+      const placed = await placeShopOrder(accessToken, {
+        payment_mode: PAYMENT_MODE_BY_UI[selectedPayment] || 'COD',
+        shipping_cost: computedShipping,
+      });
+      setPlacedOrder(placed);
+      dispatch(clearCart());
+      setStep(5);
+    } catch (err) {
+      setPlaceOrderError(err?.message || 'Could not place order.');
+    } finally {
+      setPlacingOrder(false);
+    }
+  };
+
+  const canProceedFromAddressStep =
+    isAuthenticated &&
+    !!accessToken &&
+    !addressLoading &&
+    addresses.length > 0 &&
+    selectedAddressId != null &&
+    !!selectedAddress;
 
   return (
     <div className="bg-white min-h-screen font-sans pb-20 relative">
@@ -184,52 +415,113 @@ const Cart = () => {
           </>
         ) : step === 2 ? (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-            {/* Address Selection Section */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 mb-12 md:mb-16">
-              {addresses.map((addr) => (
-                <div key={addr.id} className="bg-white border-2 border-[#f47a4d] rounded-[24px] p-6 md:p-8 shadow-xl shadow-orange-100/40 relative">
-                  <div className="flex items-center justify-between mb-6 md:mb-8">
-                    <span className="text-[16px] md:text-[17px] font-black text-[#111827]">{addr.label}</span>
-                    <div className="flex items-center space-x-2">
-                       <button 
-                         onClick={() => handleEditAddress(addr)}
-                         className="p-2.5 bg-gray-100/50 rounded-full text-gray-400 hover:text-[#111827] transition-colors"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
-                       </button>
-                       <button className="p-2.5 bg-gray-100/50 rounded-full text-gray-400 hover:text-red-500 transition-colors">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                       </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-[18px] font-black text-[#111827] tracking-tight">{addr.name}</p>
-                    <p className="text-[16px] font-bold text-[#111827] tracking-tight">{addr.phone}</p>
-                    <p className="text-[13px] font-medium text-gray-400 leading-relaxed mt-4">
-                      {addr.address}
-                    </p>
-                  </div>
-                </div>
-              ))}
-
-              {/* Add Address Card */}
-              <div 
-                onClick={handleAddAddress}
-                className="bg-[#f9fafb] border-2 border-dashed border-gray-100 rounded-[24px] p-8 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-all group h-[280px]"
-              >
-                <div className="w-[50px] h-[50px] bg-gray-200/50 rounded-full flex items-center justify-center mb-4 group-hover:bg-white transition-colors">
-                  <Plus className="w-6 h-6 text-gray-400 group-hover:text-[#111827]" />
-                </div>
-                <span className="text-[13px] font-bold text-gray-400 group-hover:text-[#111827]">Add another address</span>
+            {!isAuthenticated ? (
+              <div className="max-w-xl mx-auto bg-orange-50/80 border border-orange-100 rounded-[24px] p-10 text-center mb-12">
+                <MapPin className="w-10 h-10 text-[#f47a4d] mx-auto mb-4 stroke-[2px]" />
+                <h2 className="text-xl font-black text-[#111827] mb-2">Sign in to manage delivery addresses</h2>
+                <p className="text-gray-500 text-[14px] mb-6 leading-relaxed">
+                  Saved addresses are loaded from your account. Sign in to add or choose where we should ship your order.
+                </p>
+                <Link
+                  to="/login"
+                  state={{ from: '/cart' }}
+                  className="inline-flex items-center px-10 py-4 bg-[#f47a4d] text-white rounded-full font-black text-[15px] hover:bg-[#ff8a5e] shadow-lg shadow-orange-100 transition-all"
+                >
+                  Sign in to continue
+                </Link>
               </div>
-            </div>
+            ) : (
+              <>
+                {addressError && (
+                  <div className="mb-8 p-4 rounded-2xl bg-red-50 border border-red-100 text-[13px] font-bold text-red-700">{addressError}</div>
+                )}
+                {addressLoading && (
+                  <p className="text-center text-gray-400 font-bold mb-8">Loading your addresses…</p>
+                )}
+                {/* Address Selection Section */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 mb-12 md:mb-16">
+                  {addresses.map((addr) => {
+                    const isSelected = selectedAddressId === addr.id;
+                    return (
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        key={addr.id}
+                        onClick={() => handleSelectAddress(addr)}
+                        onKeyDown={(ev) => {
+                          if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            handleSelectAddress(addr);
+                          }
+                        }}
+                        className={`bg-white rounded-[24px] p-6 md:p-8 shadow-lg relative cursor-pointer outline-none transition-all ${
+                          isSelected ? 'border-2 border-[#f47a4d] shadow-orange-100/40 ring-2 ring-orange-100' : 'border-2 border-gray-100 hover:border-gray-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-6 md:mb-8">
+                          <span className="text-[16px] md:text-[17px] font-black text-[#111827]">{addr.label}</span>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              type="button"
+                              onClick={(e) => handleEditAddress(e, addr)}
+                              className="p-2.5 bg-gray-100/50 rounded-full text-gray-400 hover:text-[#111827] transition-colors"
+                              aria-label="Edit address"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteAddress(e, addr)}
+                              className="p-2.5 bg-gray-100/50 rounded-full text-gray-400 hover:text-red-500 transition-colors"
+                              aria-label="Delete address"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {isSelected && (
+                            <span className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Selected</span>
+                          )}
+                          <p className="text-[18px] font-black text-[#111827] tracking-tight">{addr.name}</p>
+                          <p className="text-[16px] font-bold text-[#111827] tracking-tight">{addr.phone}</p>
+                          <p className="text-[13px] font-medium text-gray-400 leading-relaxed mt-4">{addr.address}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={handleAddAddress}
+                    onKeyDown={(ev) => {
+                      if (ev.key === 'Enter' || ev.key === ' ') {
+                        ev.preventDefault();
+                        handleAddAddress();
+                      }
+                    }}
+                    className="bg-[#f9fafb] border-2 border-dashed border-gray-100 rounded-[24px] p-8 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-gray-50 hover:border-gray-200 transition-all group min-h-[260px]"
+                  >
+                    <div className="w-[50px] h-[50px] bg-gray-200/50 rounded-full flex items-center justify-center mb-4 group-hover:bg-white transition-colors">
+                      <Plus className="w-6 h-6 text-gray-400 group-hover:text-[#111827]" />
+                    </div>
+                    <span className="text-[13px] font-bold text-gray-400 group-hover:text-[#111827]">
+                      {addresses.length ? 'Add another address' : 'Add delivery address'}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Footer Actions */}
             <div className="flex justify-end pt-8">
-              <button 
+              <button
+                type="button"
                 onClick={() => setStep(3)}
-                className="group px-14 py-4 bg-[#f47a4d] text-white rounded-full font-black text-[15px] hover:bg-[#ff8a5e] hover:shadow-orange-200 transition-all shadow-xl shadow-orange-100 flex items-center justify-center"
+                disabled={!canProceedFromAddressStep}
+                title={!canProceedFromAddressStep ? 'Choose or save a delivery address' : ''}
+                className="group px-14 py-4 bg-[#f47a4d] text-white rounded-full font-black text-[15px] hover:bg-[#ff8a5e] hover:shadow-orange-200 transition-all shadow-xl shadow-orange-100 flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
               >
                 Next
                 <ArrowRight className="ml-3 w-5 h-5 group-hover:translate-x-1 transition-transform" />
@@ -248,13 +540,17 @@ const Cart = () => {
                       <MapPin className="ml-0.5 w-5 h-5 md:w-6 md:h-6 stroke-[2.5px]" />
                     </div>
                     <div className="space-y-0.5 md:space-y-1">
-                      <span className="text-[12px] md:text-[14px] font-black text-[#f47a4d] uppercase tracking-widest block">Shop</span>
-                      <p className="text-[13px] md:text-[14px] font-medium text-gray-400 leading-tight">Moshi Dehu Road, MAHARASHTRA, Pune, 412105</p>
+                      <span className="text-[12px] md:text-[14px] font-black text-[#f47a4d] uppercase tracking-widest block">
+                        {selectedAddress?.label || 'Delivery'}
+                      </span>
+                      <p className="text-[13px] md:text-[14px] font-medium text-gray-400 leading-tight">
+                        {selectedAddress?.address || '—'}
+                      </p>
                     </div>
                   </div>
                   <div className="text-left md:text-right mt-4 md:mt-0 pl-14 md:pl-0">
-                    <p className="text-[14px] md:text-[15px] font-black text-gray-900">Sarthak Kudale</p>
-                    <p className="text-[13px] md:text-[14px] font-bold text-gray-400 tracking-tight">9172049840</p>
+                    <p className="text-[14px] md:text-[15px] font-black text-gray-900">{selectedAddress?.name || '—'}</p>
+                    <p className="text-[13px] md:text-[14px] font-bold text-gray-400 tracking-tight">{selectedAddress?.phone || ''}</p>
                   </div>
                 </div>
                 <button 
@@ -545,13 +841,15 @@ const Cart = () => {
                           <MapPin className="ml-0.5 w-6 h-6 stroke-[2.5px]" />
                         </div>
                         <div className="space-y-0.5">
-                          <span className="text-[13px] font-black text-[#f47a4d] uppercase tracking-widest block">Shop</span>
-                          <p className="text-[13px] font-medium text-gray-400">Moshi Dehu Road, MAHARASHTRA, Pune, 412105</p>
+                          <span className="text-[13px] font-black text-[#f47a4d] uppercase tracking-widest block">
+                            {selectedAddress?.label || 'Delivery'}
+                          </span>
+                          <p className="text-[13px] font-medium text-gray-400">{selectedAddress?.address || '—'}</p>
                         </div>
                       </div>
                       <div className="text-right mt-4 md:mt-0">
-                        <p className="text-[14px] font-black text-gray-900">Sarthak Kudale</p>
-                        <p className="text-[13px] font-bold text-gray-400 tracking-tight">9172049840</p>
+                        <p className="text-[14px] font-black text-gray-900">{selectedAddress?.name || '—'}</p>
+                        <p className="text-[13px] font-bold text-gray-400 tracking-tight">{selectedAddress?.phone || ''}</p>
                       </div>
                     </div>
 
@@ -653,11 +951,22 @@ const Cart = () => {
                     <span className="text-[24px] font-black text-[#111827]">₹ {(selectedPayment === 'cod' ? cartTotalAmount + platformFee : toPay).toLocaleString()}</span>
                   </div>
 
-                  <button 
-                    onClick={() => setStep(5)}
-                    className="w-full py-5 bg-[#333333] text-white rounded-[20px] font-black text-[16px] mb-8 hover:bg-black transition-all shadow-xl shadow-gray-200"
+                  {placeOrderError && (
+                    <div className="mb-4 px-4 py-3 rounded-[14px] border border-red-100 bg-red-50 text-[13px] font-bold text-red-700">
+                      {placeOrderError}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handlePlaceOrder}
+                    disabled={placingOrder || !cartItems.length || !selectedAddress}
+                    className="w-full py-5 bg-[#333333] text-white rounded-[20px] font-black text-[16px] mb-8 hover:bg-black transition-all shadow-xl shadow-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {selectedPayment === 'cod' ? 'Confirm Order' : 'Pay Now'}
+                    {placingOrder
+                      ? 'Placing order…'
+                      : selectedPayment === 'cod'
+                        ? 'Confirm Order'
+                        : 'Pay Now'}
                   </button>
 
                   <div className="relative pl-6 py-2 border-l-[3px] border-[#7c3aed] rounded-r-lg group">
@@ -693,8 +1002,21 @@ const Cart = () => {
             {/* Order Number Box */}
             <div className="bg-[#f47a4d] rounded-[24px] md:rounded-[28px] p-6 md:p-8 text-center mb-10 md:mb-12 shadow-xl shadow-orange-100 mx-2 md:mx-0">
               <p className="text-[10px] md:text-[11px] font-black text-white/70 uppercase tracking-[2px] md:tracking-[3px] mb-2">Order Number</p>
-              <h2 className="text-[18px] md:text-[22px] font-black text-white mb-1 tracking-tight">ORD-2026-15482</h2>
-              <p className="text-[12px] md:text-[13px] font-medium text-white/90 tracking-tight">Placed on February 15, 2026</p>
+              <h2 className="text-[14px] md:text-[18px] font-black text-white mb-1 tracking-tight break-all px-2">
+                {placedOrder?.order_id || '—'}
+              </h2>
+              <p className="text-[12px] md:text-[13px] font-medium text-white/90 tracking-tight">
+                Placed on{' '}
+                {placedOrder?.ordered_date
+                  ? new Date(placedOrder.ordered_date).toLocaleString()
+                  : new Date().toLocaleString()}
+              </p>
+              <Link
+                to="/account"
+                className="inline-block mt-4 text-[12px] font-black text-white underline underline-offset-4 hover:opacity-80"
+              >
+                View in My Orders →
+              </Link>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
@@ -781,9 +1103,13 @@ const Cart = () => {
                       <MapPin className="ml-0.5 w-6 h-6 stroke-[2.5px]" />
                     </div>
                     <div>
-                      <span className="text-[13px] font-black text-[#f47a4d] uppercase tracking-[2px] block mb-1">Shop</span>
-                      <p className="text-[14px] font-medium text-gray-900 leading-relaxed mb-1">Moshi Dehu Road, MAHARASHTRA, Pune, 412105</p>
-                      <p className="text-[13px] font-bold text-gray-400 tracking-tight">Sarthak Kudale • 9172049840</p>
+                      <span className="text-[13px] font-black text-[#f47a4d] uppercase tracking-[2px] block mb-1">
+                        {selectedAddress?.label || 'Delivery'}
+                      </span>
+                      <p className="text-[14px] font-medium text-gray-900 leading-relaxed mb-1">{selectedAddress?.address || '—'}</p>
+                      <p className="text-[13px] font-bold text-gray-400 tracking-tight">
+                        {selectedAddress ? `${selectedAddress.name} • ${selectedAddress.phone}` : '—'}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -829,7 +1155,11 @@ const Cart = () => {
 
                 {/* Success Bottom Actions */}
                 <div className="flex flex-col space-y-4 pt-4">
-                  <button className="w-full py-5 bg-[#f47a4d] text-white rounded-[24px] font-black text-[16px] hover:bg-[#e3693c] transition-all shadow-xl shadow-orange-100">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/')}
+                    className="w-full py-5 bg-[#f47a4d] text-white rounded-[24px] font-black text-[16px] hover:bg-[#e3693c] transition-all shadow-xl shadow-orange-100"
+                  >
                     Continue Shopping
                   </button>
                   <button className="w-full py-5 bg-white border border-gray-100 text-[#f47a4d] rounded-[24px] font-black text-[15px] hover:border-orange-100 hover:bg-orange-50/30 transition-all flex items-center justify-center">
@@ -865,56 +1195,148 @@ const Cart = () => {
               {modalMode} Address
             </h2>
 
-            <form className="space-y-5" onClick={(e) => e.stopPropagation()}>
+            <form className="space-y-5" onClick={(e) => e.stopPropagation()} onSubmit={handleSaveAddressModal}>
               <div className="space-y-1.5 text-left">
-                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Address Label</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. Home, Office, shop"
+                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Address label</label>
+                <input
+                  type="text"
+                  placeholder="Home, Shop, Office"
+                  required
+                  value={addressForm.label}
+                  onChange={(ev) => handleAddressFormChange('label', ev.target.value)}
+                  className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">First name</label>
+                  <input
+                    type="text"
+                    placeholder="First name"
+                    required
+                    value={addressForm.first_name}
+                    onChange={(ev) => handleAddressFormChange('first_name', ev.target.value)}
+                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Last name</label>
+                  <input
+                    type="text"
+                    placeholder="Last name"
+                    value={addressForm.last_name}
+                    onChange={(ev) => handleAddressFormChange('last_name', ev.target.value)}
+                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5 text-left">
+                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Phone</label>
+                <input
+                  type="tel"
+                  placeholder="Mobile number"
+                  required
+                  value={addressForm.mobile_no}
+                  onChange={(ev) => handleAddressFormChange('mobile_no', ev.target.value)}
                   className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
                 />
               </div>
 
               <div className="space-y-1.5 text-left">
-                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Full Name</label>
-                <input 
-                  type="text" 
-                  placeholder="Your Full Name"
+                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Flat / building / landmark</label>
+                <input
+                  type="text"
+                  placeholder="Apartment, suite, etc."
+                  required
+                  value={addressForm.apartment_address}
+                  onChange={(ev) => handleAddressFormChange('apartment_address', ev.target.value)}
                   className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
                 />
               </div>
 
               <div className="space-y-1.5 text-left">
-                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Phone Number</label>
-                <input 
-                  type="text" 
-                  placeholder="10 digit mobile number"
+                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Street</label>
+                <input
+                  type="text"
+                  placeholder="Street address"
+                  required
+                  value={addressForm.street_address}
+                  onChange={(ev) => handleAddressFormChange('street_address', ev.target.value)}
                   className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
                 />
               </div>
 
-              <div className="space-y-1.5 text-left">
-                <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Complete Address</label>
-                <textarea 
-                  rows="3"
-                  placeholder="Street, City, State, Pincode"
-                  className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all resize-none"
-                ></textarea>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">City</label>
+                  <input
+                    type="text"
+                    required
+                    value={addressForm.city}
+                    onChange={(ev) => handleAddressFormChange('city', ev.target.value)}
+                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">State</label>
+                  <input
+                    type="text"
+                    required
+                    value={addressForm.state}
+                    onChange={(ev) => handleAddressFormChange('state', ev.target.value)}
+                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
+                  />
+                </div>
               </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">PIN / ZIP</label>
+                  <input
+                    type="text"
+                    required
+                    value={addressForm.zip}
+                    onChange={(ev) => handleAddressFormChange('zip', ev.target.value)}
+                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
+                  />
+                </div>
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[12px] font-black uppercase tracking-wider text-gray-300 ml-1">Country</label>
+                  <input
+                    type="text"
+                    value={addressForm.country}
+                    onChange={(ev) => handleAddressFormChange('country', ev.target.value)}
+                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[14px] px-5 py-3.5 focus:outline-none focus:border-orange-200 text-[14px] font-medium transition-all"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-3 cursor-pointer text-left pt-2">
+                <input
+                  type="checkbox"
+                  checked={addressForm.default}
+                  onChange={(ev) => handleAddressFormChange('default', ev.target.checked)}
+                  className="w-5 h-5 accent-[#f47a4d] rounded-md"
+                />
+                <span className="text-[13px] font-bold text-gray-600">Save as default address</span>
+              </label>
 
               <div className="flex items-center space-x-3 pt-4">
-                <button 
+                <button
                   type="button"
                   onClick={() => setShowAddressModal(false)}
                   className="flex-1 py-3.5 border border-gray-100 text-gray-400 rounded-full font-bold text-[14px] hover:bg-gray-50 transition-all"
                 >
                   Cancel
                 </button>
-                <button 
-                  type="button"
-                  className="flex-1 py-3.5 bg-[#f47a4d] text-white rounded-full font-black text-[14px] shadow-lg shadow-orange-100 hover:bg-[#e3693c] transition-all"
+                <button
+                  type="submit"
+                  disabled={addressFormSubmitting}
+                  className="flex-1 py-3.5 bg-[#f47a4d] text-white rounded-full font-black text-[14px] shadow-lg shadow-orange-100 hover:bg-[#e3693c] transition-all disabled:opacity-60"
                 >
-                  {modalMode === 'add' ? 'Save Address' : 'Update Address'}
+                  {addressFormSubmitting ? 'Saving…' : modalMode === 'add' ? 'Save address' : 'Update address'}
                 </button>
               </div>
             </form>

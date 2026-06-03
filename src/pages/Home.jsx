@@ -3,12 +3,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Search, ChevronDown, Star } from 'lucide-react';
 import {
   fetchProductsList,
+  fetchMainCategories,
   fetchCarMakers,
   fetchCarModels,
   fetchCarYears,
   fetchCarVariants,
   resolveApiMediaUrl,
 } from '../api/shop';
+import CategoryCard from '../components/CategoryCard';
+import { categoryBrowsePath } from '../utils/categoryNav';
 import { formatProductPrice, productCode } from '../utils/productFormat';
 import ProductThumb from '../components/ProductThumb';
 
@@ -33,6 +36,9 @@ const Home = () => {
   const [year, setYear] = useState('');
   const [variantId, setVariantId] = useState('');
   const [vehicleListsLoading, setVehicleListsLoading] = useState(false);
+  const [mainCategories, setMainCategories] = useState([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categoriesError, setCategoriesError] = useState(null);
 
   const loadProducts = useCallback(async () => {
     setProductsLoading(true);
@@ -51,6 +57,29 @@ const Home = () => {
   useEffect(() => {
     loadProducts();
   }, [loadProducts]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCategoriesLoading(true);
+    setCategoriesError(null);
+    fetchMainCategories({ limit: 10 })
+      .then((res) => {
+        if (cancelled) return;
+        setMainCategories(Array.isArray(res.data) ? res.data : []);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setCategoriesError(e instanceof Error ? e.message : 'Could not load categories.');
+          setMainCategories([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCategoriesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     fetchCarMakers()
@@ -465,35 +494,43 @@ const Home = () => {
               <h2 className="text-[32px] font-bold text-[#111827] leading-tight">Categories</h2>
               <p className="text-[#6b7280] text-base font-medium">Browse authentic OEM auto parts</p>
             </div>
-            <button className="text-[#f47a4d] text-base font-black hover:underline underline-offset-8">See All</button>
+            <Link
+              to="/categories"
+              className="text-[#f47a4d] text-base font-black hover:underline underline-offset-8"
+            >
+              See All
+            </Link>
           </div>
 
+          {categoriesError && (
+            <div className="mb-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-800">
+              {categoriesError}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-x-6 gap-y-10">
-            {[
-              "Maintenance Service Parts", 
-              "Filters", 
-              "Windscreen Cleaning System", 
-              "Car Accessories", 
-              "Lighting",
-              "Control Cables",
-              "Brake System",
-              "Bearings",
-              "Clutch System",
-              "Electric Components"
-            ].map((category) => (
-              <div key={category} className="cursor-pointer group">
-                <div className="aspect-square bg-gray-100 rounded-[20px] mb-4 flex items-center justify-center p-8 group-hover:bg-gray-200 transition-all duration-300 group-hover:scale-[1.02]">
-                  <div className="w-full aspect-square rounded-full border-[8px] border-white bg-gray-200 shadow-md flex items-center justify-center overflow-hidden">
-                    <div className="w-full h-full border-4 border-gray-300 rounded-full flex items-center justify-center">
-                      <div className="w-1/3 h-1/3 rounded-full border-2 border-gray-400" />
-                    </div>
-                  </div>
+            {categoriesLoading &&
+              Array.from({ length: 10 }).map((_, idx) => (
+                <div key={`cat-sk-${idx}`} className="animate-pulse">
+                  <div className="aspect-square bg-gray-100 rounded-[20px] mb-4" />
+                  <div className="h-4 bg-gray-100 rounded w-3/4 mx-1" />
                 </div>
-                <h4 className="text-[15px] font-bold text-[#111827] group-hover:text-[#f47a4d] transition-colors leading-snug px-1">
-                  {category}
-                </h4>
-              </div>
-            ))}
+              ))}
+
+            {!categoriesLoading &&
+              mainCategories.map((cat) => (
+                <CategoryCard
+                  key={cat.id}
+                  category={cat}
+                  to={categoryBrowsePath(cat)}
+                />
+              ))}
+
+            {!categoriesLoading && !mainCategories.length && !categoriesError && (
+              <p className="col-span-full text-center text-[#6b7280] py-8">
+                No categories available yet.
+              </p>
+            )}
           </div>
         </div>
 

@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { ChevronDown, RotateCcw, Box, Building2, LayoutGrid, Package, User, Heart, MapPin, FileText, Building, Pencil, Lock, ArrowLeft, Mail, Smartphone, X, Trash2, Plus, ArrowRight } from 'lucide-react';
+import { ChevronDown, RotateCcw, Box, Building2, Package, User, Heart, MapPin, FileText, Building, Pencil, Lock, ArrowLeft, Mail, Smartphone, X, Trash2, Plus, ArrowRight, RefreshCw } from 'lucide-react';
 import {
   fetchCarMakers,
   fetchCarModels,
@@ -12,8 +12,148 @@ import {
   fetchCustomerProfile,
   createCustomerProfile,
   updateCustomerProfile,
+  fetchUserOrders,
+  fetchShippingAddresses,
+  resolveApiMediaUrl,
 } from '../api/shop';
 import { clearCredentials } from '../store/slices/authSlice';
+
+const PLACEHOLDER_PRODUCT =
+  'https://img.freepik.com/free-photo/car-parts-isolated-white-background_1232-4028.jpg';
+
+function formatOrderWhen(iso, fallbackLabel) {
+  if (!iso) return fallbackLabel || '—';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return fallbackLabel || String(iso);
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch {
+    return fallbackLabel || '—';
+  }
+}
+
+function shopOrderRowKey(order) {
+  return String(order?.order_id ?? order?.id ?? '');
+}
+
+function firstLineImageUrl(line) {
+  const raw = line?.item?.image;
+  return raw ? resolveApiMediaUrl(raw) : '';
+}
+
+function orderCardHeading(order) {
+  const lines = Array.isArray(order.items) ? order.items : [];
+  if (!lines.length) return 'No items in order';
+  const first = lines[0];
+  const title = first?.item?.title || first?.item_variant?.name || 'Product';
+  return lines.length > 1 ? `${title} +${lines.length - 1} more` : title;
+}
+
+function orderCardImage(order) {
+  const lines = Array.isArray(order.items) ? order.items : [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const u = firstLineImageUrl(lines[i]);
+    if (u) return u;
+  }
+  return PLACEHOLDER_PRODUCT;
+}
+
+function orderGrandTotal(order) {
+  const v = order?.get_total_inclusive_all ?? order?.total_price;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatInrAmount(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '—';
+  return x.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+function shippingAddressFromOrder(order) {
+  const d = order?.shipping_address_detail;
+  if (!d || typeof d !== 'object') return null;
+  const name = `${d.first_name || ''} ${d.last_name || ''}`.trim();
+  const line = [d.apartment_address, d.street_address, d.city, d.state, d.country, d.zip]
+    .filter(Boolean)
+    .join(', ');
+  return {
+    label: (d.label || '').trim() || 'Delivery',
+    name: name || '—',
+    phone: d.mobile_no || '',
+    line,
+  };
+}
+
+function lineItemTitle(line) {
+  return line?.item?.title || line?.item_variant?.name || line?.item_variant?.title || 'Item';
+}
+
+const ORDER_STATUS_PIPELINE = [
+  'Ordered',
+  'Admin Check',
+  'At Manufacturing',
+  'At Hub',
+  'Shipped',
+  'Delivered',
+];
+
+function normalizeOrderStatus(s) {
+  if (!s || typeof s !== 'string') return '';
+  return s.trim();
+}
+
+function orderStatusIndex(status) {
+  return ORDER_STATUS_PIPELINE.indexOf(normalizeOrderStatus(status));
+}
+
+function orderStatusBadgeClasses(status) {
+  const n = normalizeOrderStatus(status);
+  if (n === 'Delivered') return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+  if (n === 'Shipped') return 'bg-sky-50 text-sky-800 border-sky-200';
+  if (n === 'At Hub') return 'bg-violet-50 text-violet-800 border-violet-200';
+  if (n === 'At Manufacturing') return 'bg-amber-50 text-amber-800 border-amber-200';
+  if (n === 'Admin Check') return 'bg-blue-50 text-blue-800 border-blue-200';
+  if (n === 'Ordered') return 'bg-gray-100 text-gray-800 border-gray-200';
+  return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+function orderStatusDescription(status) {
+  const n = normalizeOrderStatus(status);
+  const map = {
+    Ordered: 'We have received your order and are preparing it.',
+    'Admin Check': 'Our team is reviewing your order.',
+    'At Manufacturing': 'Your items are in production or assembly.',
+    'At Hub': 'Your order is at the distribution hub.',
+    Shipped: 'Your order has left our facility and is in transit.',
+    Delivered: 'Your order has been delivered.',
+  };
+  if (map[n]) return map[n];
+  if (n) return `Current stage: ${n}.`;
+  return 'Status reflects the latest update from our team.';
+}
+
+function buildFulfillmentTimeline(status, orderedWhenLabel) {
+  const n = normalizeOrderStatus(status);
+  const idx = ORDER_STATUS_PIPELINE.indexOf(n);
+  if (n && idx === -1) {
+    return [{ title: n, date: orderedWhenLabel || 'Latest update', status: 'current' }];
+  }
+  const effectiveIdx = idx >= 0 ? idx : 0;
+  return ORDER_STATUS_PIPELINE.map((title, i) => {
+    let stepStatus = 'pending';
+    if (i < effectiveIdx) stepStatus = 'completed';
+    else if (i === effectiveIdx) stepStatus = 'current';
+
+    let date = 'Upcoming';
+    if (stepStatus === 'completed') date = 'Completed';
+    if (stepStatus === 'current') {
+      date = title === 'Ordered' && orderedWhenLabel ? orderedWhenLabel : 'In progress';
+    }
+
+    return { title, date, status: stepStatus };
+  });
+}
 
 const Account = () => {
   const navigate = useNavigate();
@@ -21,9 +161,7 @@ const Account = () => {
   const auth = useSelector((state) => state.auth);
   const [activeTab, setActiveTab] = useState('Orders');
   const [statusFilterOpen, setStatusFilterOpen] = useState(false);
-  const [selectedStatus, setSelectedStatus] = useState('Completed');
-  const [vehicleFilterOpen, setVehicleFilterOpen] = useState(false);
-  const [selectedVehicle, setSelectedVehicle] = useState('BMW i8');
+  const [selectedOrderStatus, setSelectedOrderStatus] = useState('All');
   const [openTrackOrderId, setOpenTrackOrderId] = useState(null);
   const [openReturnOrderId, setOpenReturnOrderId] = useState(null);
   const [showFAQ, setShowFAQ] = useState(false);
@@ -49,6 +187,13 @@ const Account = () => {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileSubmitting, setProfileSubmitting] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const [ordersList, setOrdersList] = useState([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState('');
+  const [openDetailsOrderKey, setOpenDetailsOrderKey] = useState(null);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [addressesLoading, setAddressesLoading] = useState(false);
+  const [addressesError, setAddressesError] = useState('');
   const [garageForm, setGarageForm] = useState({
     car_maker: '',
     car_model: '',
@@ -60,13 +205,14 @@ const Account = () => {
     oem_brand_url: '',
   });
 
-  const statuses = ['Completed', 'In Transit', 'Cancelled'];
-  const vehicles = ['All Cars', 'BMW i8', 'Audi A6', 'Mercedes C-Class', 'Tesla Model 3'];
-  const trackingSteps = [
-    { title: 'Order Placed', date: 'October 10, 2023', status: 'completed' },
-    { title: 'Processing', date: 'October 12, 2023', status: 'completed' },
-    { title: 'Shipped', date: 'October 12, 2023', status: 'current' },
-    { title: 'Online shipment booked', date: 'Pending', status: 'pending' }
+  const orderStatusFilters = [
+    'All',
+    'Ordered',
+    'Admin Check',
+    'At Manufacturing',
+    'At Hub',
+    'Shipped',
+    'Delivered',
   ];
   const returnReasons = [
     'Bought by mistake',
@@ -105,32 +251,22 @@ const Account = () => {
     { id: 'Documents', icon: FileText }
   ];
 
-  const orders = [
-    {
-      id: "1209307",
-      date: "October 10, 2023",
-      name: "Rear Brake Rotors",
-      price: 3500,
-      status: "In Transit",
-      image: "https://img.freepik.com/free-photo/car-parts-isolated-white-background_1232-4028.jpg"
-    },
-    {
-      id: "1209308",
-      date: "October 14, 2023",
-      name: "Air Filter",
-      price: 850,
-      status: "In Transit",
-      image: "https://img.freepik.com/free-photo/car-parts-isolated-white-background_1232-4028.jpg"
-    },
-    {
-      id: "1209304",
-      date: "October 10, 2023",
-      name: "Rear Brake Rotors",
-      price: 3500,
-      status: "Delivered",
-      image: "https://img.freepik.com/free-photo/car-parts-isolated-white-background_1232-4028.jpg"
-    }
-  ];
+  const filteredOrders = useMemo(() => {
+    return ordersList.filter((o) => selectedOrderStatus === 'All' || o.status === selectedOrderStatus);
+  }, [ordersList, selectedOrderStatus]);
+
+  const refreshOrders = useCallback(() => {
+    if (!auth?.tokens?.access) return;
+    setOrdersLoading(true);
+    setOrdersError('');
+    fetchUserOrders(auth.tokens.access, { limit: 100 })
+      .then((list) => setOrdersList(Array.isArray(list) ? list : []))
+      .catch((e) => {
+        setOrdersList([]);
+        setOrdersError(e instanceof Error ? e.message : 'Could not load orders.');
+      })
+      .finally(() => setOrdersLoading(false));
+  }, [auth?.tokens?.access]);
 
   useEffect(() => {
     if (!auth?.tokens?.access) {
@@ -153,6 +289,35 @@ const Account = () => {
       })
       .finally(() => setProfileLoading(false));
   }, [auth?.tokens?.access, navigate]);
+
+  useEffect(() => {
+    if (!auth?.tokens?.access || activeTab !== 'Orders') return undefined;
+    refreshOrders();
+    return undefined;
+  }, [auth?.tokens?.access, activeTab, refreshOrders]);
+
+  useEffect(() => {
+    if (activeTab !== 'Orders' || !auth?.tokens?.access) return undefined;
+    const onVis = () => {
+      if (document.visibilityState === 'visible') refreshOrders();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [activeTab, auth?.tokens?.access, refreshOrders]);
+
+  useEffect(() => {
+    if (!auth?.tokens?.access || activeTab !== 'Addresses') return undefined;
+    setAddressesLoading(true);
+    setAddressesError('');
+    fetchShippingAddresses(auth.tokens.access)
+      .then((list) => setSavedAddresses(Array.isArray(list) ? list : []))
+      .catch((e) => {
+        setSavedAddresses([]);
+        setAddressesError(e instanceof Error ? e.message : 'Could not load addresses.');
+      })
+      .finally(() => setAddressesLoading(false));
+    return undefined;
+  }, [auth?.tokens?.access, activeTab]);
 
   useEffect(() => {
     if (!auth?.tokens?.access) return;
@@ -431,48 +596,64 @@ const Account = () => {
 
         {activeTab === 'Orders' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+            {ordersError && (
+              <div className="mb-6 rounded-[16px] border border-red-100 bg-red-50 px-5 py-3 text-[14px] font-semibold text-red-600">
+                {ordersError}
+              </div>
+            )}
             {/* Filters Bar */}
             <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-10 space-y-4 md:space-y-0">
-              <div className="flex items-center space-x-4 relative">
-                <button 
+              <div className="flex items-center space-x-4 relative flex-wrap gap-y-4">
+                <button
+                  type="button"
                   onClick={() => setStatusFilterOpen(!statusFilterOpen)}
                   className={`flex items-center px-4 py-2.5 bg-white border rounded-[12px] text-[13px] font-bold transition-all shadow-sm ${
-                  statusFilterOpen ? 'border-[#f47a4d] ring-4 ring-orange-50' : 'border-gray-100 text-gray-500 hover:border-gray-200'
-                }`}>
+                    statusFilterOpen ? 'border-[#f47a4d] ring-4 ring-orange-50' : 'border-gray-100 text-gray-500 hover:border-gray-200'
+                  }`}
+                >
                   <Box className="w-4 h-4 mr-2.5 text-[#f47a4d]" />
-                  {selectedStatus}
-                  <ChevronDown className={`w-4 h-4 ml-2.5 text-gray-300 transition-transform duration-300 ${statusFilterOpen ? 'rotate-180' : ''}`} />
+                  {selectedOrderStatus}
+                  <ChevronDown
+                    className={`w-4 h-4 ml-2.5 text-gray-300 transition-transform duration-300 ${statusFilterOpen ? 'rotate-180' : ''}`}
+                  />
                 </button>
 
                 {/* Status Dropdown Menu */}
                 {statusFilterOpen && (
                   <>
-                    <div className="fixed inset-0 z-10" onClick={() => setStatusFilterOpen(false)}></div>
-                    <div className="absolute top-full left-0 mt-3 w-[220px] bg-white border border-gray-100 rounded-[24px] shadow-2xl shadow-gray-200/50 p-3 z-20 animate-in fade-in zoom-in-95 duration-200 origin-top-left">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-[1.5px] px-4 py-2 mb-1">FILTER BY STATUS</p>
+                    <div className="fixed inset-0 z-10" onClick={() => setStatusFilterOpen(false)} aria-hidden />
+                    <div className="absolute top-full left-0 mt-3 w-[240px] max-h-[280px] overflow-y-auto bg-white border border-gray-100 rounded-[24px] shadow-2xl shadow-gray-200/50 p-3 z-20 animate-in fade-in zoom-in-95 duration-200 origin-top-left">
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-[1.5px] px-4 py-2 mb-1">
+                        FILTER BY STATUS
+                      </p>
                       <div className="space-y-1">
-                        {statuses.map((status) => (
+                        {orderStatusFilters.map((statusOpt) => (
                           <button
-                            key={status}
+                            type="button"
+                            key={statusOpt}
                             onClick={() => {
-                              setSelectedStatus(status);
+                              setSelectedOrderStatus(statusOpt);
                               setStatusFilterOpen(false);
                             }}
                             className={`w-full flex items-center justify-between px-4 py-3 rounded-[16px] text-[14px] font-bold transition-all ${
-                              selectedStatus === status 
-                              ? 'bg-orange-50 text-[#f47a4d]' 
-                              : 'text-gray-400 hover:bg-gray-50 hover:text-gray-600'
+                              selectedOrderStatus === statusOpt
+                                ? 'bg-orange-50 text-[#f47a4d]'
+                                : 'text-gray-400 hover:bg-gray-50 hover:text-gray-600'
                             }`}
                           >
                             <div className="flex items-center">
-                              <div className={`w-1.5 h-1.5 rounded-full mr-3.5 ${
-                                selectedStatus === status ? 'bg-[#f47a4d]' : 'border border-gray-300 bg-transparent'
-                              }`}></div>
-                              {status}
+                              <div
+                                className={`w-1.5 h-1.5 rounded-full mr-3.5 ${
+                                  selectedOrderStatus === statusOpt
+                                    ? 'bg-[#f47a4d]'
+                                    : 'border border-gray-300 bg-transparent'
+                                }`}
+                              />
+                              {statusOpt}
                             </div>
-                            {selectedStatus === status && (
+                            {selectedOrderStatus === statusOpt && (
                               <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center shadow-sm">
-                                <svg className="w-3.5 h-3.5 text-[#f47a4d]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                <svg className="w-3.5 h-3.5 text-[#f47a4d]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><polyline points="20 6 9 17 4 12" /></svg>
                               </div>
                             )}
                           </button>
@@ -481,135 +662,330 @@ const Account = () => {
                     </div>
                   </>
                 )}
+
+                {ordersLoading ? (
+                  <span className="text-[13px] font-bold text-gray-400">Loading orders…</span>
+                ) : (
+                  <span className="text-[13px] font-bold text-gray-400">
+                    {filteredOrders.length} order{filteredOrders.length === 1 ? '' : 's'}
+                  </span>
+                )}
               </div>
 
-              <div className="flex items-center space-x-4">
-                <div className="relative">
-                  <button 
-                    onClick={() => setVehicleFilterOpen(!vehicleFilterOpen)}
-                    className={`flex items-center px-4 py-2.5 bg-white border rounded-[12px] text-[13px] font-bold transition-all shadow-sm ${
-                    vehicleFilterOpen ? 'border-[#f47a4d] ring-4 ring-orange-50' : 'border-gray-100 text-gray-500 hover:border-gray-200'
-                  }`}>
-                    <Package className="w-4 h-4 mr-2.5 text-[#f47a4d]" />
-                    {selectedVehicle}
-                    <ChevronDown className={`w-4 h-4 ml-2.5 text-gray-300 transition-transform duration-300 ${vehicleFilterOpen ? 'rotate-180' : ''}`} />
-                  </button>
-
-                  {/* Vehicle Dropdown Menu */}
-                  {vehicleFilterOpen && (
-                    <>
-                      <div className="fixed inset-0 z-10" onClick={() => setVehicleFilterOpen(false)}></div>
-                      <div className="absolute top-full right-0 md:left-0 mt-3 w-[220px] bg-white border border-gray-100 rounded-[24px] shadow-2xl shadow-gray-200/50 p-3 z-20 animate-in fade-in zoom-in-95 duration-200 origin-top">
-                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-[1.5px] px-4 py-2 mb-1">FILTER BY VEHICLE</p>
-                        <div className="space-y-1">
-                          {vehicles.map((v) => (
-                            <button
-                              key={v}
-                              onClick={() => {
-                                setSelectedVehicle(v);
-                                setVehicleFilterOpen(false);
-                              }}
-                              className={`w-full flex items-center justify-between px-4 py-3 rounded-[16px] text-[14px] font-bold transition-all ${
-                                selectedVehicle === v 
-                                ? 'bg-orange-50 text-[#f47a4d]' 
-                                : 'text-gray-400 hover:bg-gray-50 hover:text-gray-600'
-                              }`}
-                            >
-                              <div className="flex items-center">
-                                <div className={`w-1.5 h-1.5 rounded-full mr-3.5 ${
-                                  selectedVehicle === v ? 'bg-[#f47a4d]' : 'border border-gray-300 bg-transparent'
-                                }`}></div>
-                                {v}
-                              </div>
-                              {selectedVehicle === v && (
-                                <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center shadow-sm">
-                                  <svg className="w-3.5 h-3.5 text-[#f47a4d]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                </div>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-                
-                <div className="flex items-center">
-                  <span className="text-[13px] font-bold text-gray-300 mr-3">from</span>
-                  <button className="flex items-center px-5 py-2.5 bg-white border border-gray-100 rounded-[14px] text-[14px] font-black text-gray-600 hover:border-[#7c3aed] hover:text-[#7c3aed] transition-all shadow-sm group">
-                    Garage
-                    <div className="ml-3 w-8 h-5 bg-gray-100 rounded-lg flex items-center px-1 group-hover:bg-[#7c3aed]/10">
-                       <Building className="w-3.5 h-3.5 text-gray-400 group-hover:text-[#7c3aed]" />
-                    </div>
-                  </button>
-                </div>
-              </div>
+              <button
+                type="button"
+                onClick={refreshOrders}
+                disabled={ordersLoading}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-[12px] border border-gray-100 bg-white text-[13px] font-bold text-gray-600 hover:border-[#7c3aed]/30 hover:text-[#7c3aed] transition-all shadow-sm disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <RefreshCw className={`w-4 h-4 ${ordersLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
             </div>
 
             {/* Orders List */}
             <div className="space-y-6">
-              {orders.map((order) => (
-                <div key={order.id} className="bg-white border border-gray-100/60 rounded-[28px] overflow-hidden hover:shadow-xl hover:shadow-gray-100/40 transition-all duration-500 group">
+              {!ordersLoading && !filteredOrders.length ? (
+                <div className="rounded-[28px] border border-gray-100 bg-gray-50/80 px-8 py-16 text-center">
+                  <Package className="w-14 h-14 text-gray-300 mx-auto mb-4 stroke-[1.5]" />
+                  <p className="text-[17px] font-black text-[#111827] mb-2">No orders yet</p>
+                  <p className="text-[14px] text-gray-400 mb-8 max-w-md mx-auto leading-relaxed">
+                    When you complete a checkout, your placed orders appear here from your account history.
+                  </p>
+                  <Link
+                    to="/vehicle-parts"
+                    className="inline-flex items-center px-8 py-3.5 bg-[#f47a4d] text-white rounded-full font-black text-[14px] hover:bg-[#ff8a5e] transition-all shadow-lg shadow-orange-100"
+                  >
+                    Browse parts
+                  </Link>
+                </div>
+              ) : null}
+              {filteredOrders.map((order) => {
+                const rowKey = shopOrderRowKey(order);
+                const placedLabel = formatOrderWhen(order.ordered_date || order.created_on);
+                const shipTo = shippingAddressFromOrder(order);
+                const statusLabel = normalizeOrderStatus(order.status) || '—';
+                const fulfillmentTimeline = buildFulfillmentTimeline(order.status, placedLabel);
+                const pipeIdx = orderStatusIndex(order.status);
+                return (
+                <div key={rowKey} className="bg-white border border-gray-100/60 rounded-[28px] overflow-hidden hover:shadow-xl hover:shadow-gray-100/40 transition-all duration-500 group">
                   <div className="p-6 md:p-8 flex flex-col md:flex-row items-center justify-between">
                     <div className="flex flex-col md:flex-row items-center flex-1 w-full">
                       {/* Image Placeholder */}
                       <div className="w-[180px] h-[130px] bg-gray-50 rounded-[24px] flex items-center justify-center p-6 mb-6 md:mb-0 md:mr-10 transition-transform group-hover:scale-105 duration-500">
-                        <img src={order.image} alt={order.name} className="max-w-full max-h-full object-contain" />
+                        <img src={orderCardImage(order)} alt="" className="max-w-full max-h-full object-contain" />
                       </div>
 
                       <div className="text-center md:text-left flex-1">
-                        <p className="text-[13px] font-bold text-gray-300 mb-1.5 uppercase tracking-wide">Placed on {order.date}</p>
-                        <h3 className="text-[20px] font-black text-[#111827] mb-3">{order.name}</h3>
-                        <p className="text-[24px] font-black text-[#111827]">₹ {order.price.toLocaleString()}</p>
+                        <div className="flex items-center justify-center md:justify-start gap-2 mb-2">
+                          <p className="text-[13px] font-bold text-gray-300 uppercase tracking-wide">
+                            {order.ordered ? `Placed on ${placedLabel}` : `Created on ${placedLabel}`}
+                          </p>
+                          {!order.ordered ? (
+                            <span className="text-[10px] font-black uppercase tracking-widest bg-amber-50 text-amber-600 rounded-full px-2 py-0.5">
+                              Pending payment
+                            </span>
+                          ) : null}
+                        </div>
+                        <h3 className="text-[20px] font-black text-[#111827] mb-3">{orderCardHeading(order)}</h3>
+                        <p className="text-[24px] font-black text-[#111827]">
+                          ₹ {formatInrAmount(orderGrandTotal(order))}
+                        </p>
+                        {Array.isArray(order.items) && order.items.length ? (
+                          <ul className="mt-4 text-left mx-auto md:mx-0 max-w-lg space-y-1.5 text-[13px] font-semibold text-gray-500">
+                            {order.items.slice(0, 4).map((line, idx) => (
+                              <li key={line.id ?? idx}>
+                                <span className="text-[#111827]">
+                                  {(line.quantity != null ? `${line.quantity}× ` : '') + lineItemTitle(line)}
+                                </span>
+                              </li>
+                            ))}
+                            {order.items.length > 4 ? (
+                              <li className="text-gray-400">+ more line items…</li>
+                            ) : null}
+                          </ul>
+                        ) : null}
                       </div>
                     </div>
 
-                    <div className="mt-8 md:mt-0 md:text-right w-full md:w-auto flex flex-col md:items-end justify-center">
+                    <div className="mt-8 md:mt-0 md:text-right w-full md:w-auto flex flex-col md:items-end justify-center gap-3">
                       <div className="mb-6">
-                        <p className="text-[15px] font-black text-[#111827] mb-1 leading-none">Status: {order.status === 'In Transit' ? 'In-transit' : order.status}</p>
-                        <p className="text-[13px] font-bold text-gray-400">Order no: {order.id}</p>
-                      </div>
-                      
-                      {order.status === 'In Transit' ? (
-                        <button 
-                          onClick={() => setOpenTrackOrderId(openTrackOrderId === order.id ? null : order.id)}
-                          className={`flex items-center justify-center px-10 py-3.5 border-[2px] transition-all rounded-full font-black text-[14px] group/btn ${
-                            openTrackOrderId === order.id 
-                            ? 'border-[#7c3aed] text-[#7c3aed] bg-purple-50/10'
-                            : 'border-[#7c3aed] text-[#7c3aed] hover:bg-purple-50/50'
-                          }`}
+                        <p className="text-[11px] font-black text-gray-400 uppercase tracking-wide mb-2">Status</p>
+                        <span
+                          className={`inline-flex items-center px-3 py-1.5 rounded-full border text-[12px] font-black tracking-tight ${orderStatusBadgeClasses(order.status)}`}
                         >
-                          Track
-                          <ChevronDown className={`w-4 h-4 ml-3 transition-transform duration-300 ${openTrackOrderId === order.id ? 'rotate-180' : ''}`} />
-                        </button>
-                      ) : (
+                          {statusLabel}
+                        </span>
+                        <p className="text-[13px] font-bold text-gray-400 break-all mt-3">
+                          Order ID: {String(order.order_id || rowKey)}
+                        </p>
+                        {order.quote_no ? (
+                          <p className="text-[12px] font-bold text-gray-400 mt-1">Quote: {order.quote_no}</p>
+                        ) : null}
+                        {order.po_number ? (
+                          <p className="text-[12px] font-bold text-gray-400 mt-1">PO: {order.po_number}</p>
+                        ) : null}
+                        {order.payment_mode ? (
+                          <p className="text-[12px] font-bold text-gray-400 mt-1">Payment: {order.payment_mode}</p>
+                        ) : null}
+                        {order.discount_percentage != null && Number(order.discount_percentage) > 0 ? (
+                          <p className="text-[12px] font-bold text-amber-600 mt-1">
+                            Discount rule: {order.discount_percentage}%
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenDetailsOrderKey((prev) => (prev === rowKey ? null : rowKey))
+                        }
+                        className={`flex items-center justify-center px-8 py-3 rounded-full font-black text-[13px] transition-all border-2 border-gray-200 text-gray-600 hover:border-[#111827] hover:text-[#111827] w-full md:w-auto`}
+                      >
+                        Order details
+                        <ChevronDown
+                          className={`w-4 h-4 ml-2 transition-transform duration-300 ${
+                            openDetailsOrderKey === rowKey ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+                      
+                      {order.status === 'Delivered' ? (
                         <button 
+                          type="button"
                           onClick={() => {
-                            if (openReturnOrderId === order.id) {
+                            if (openReturnOrderId === rowKey) {
                               setOpenReturnOrderId(null);
                             } else {
-                              setOpenReturnOrderId(order.id);
+                              setOpenReturnOrderId(rowKey);
                               setReturnStep(1);
                               setSelectedReturnReason(null);
                               setSelectedReturnOption(null);
                             }
                           }}
                           className={`flex items-center justify-center px-8 py-3.5 rounded-full font-black text-[14px] transition-all group/btn ${
-                            openReturnOrderId === order.id 
+                            openReturnOrderId === rowKey 
                             ? 'border-[2px] border-[#7c3aed] text-[#7c3aed] bg-purple-50/10' 
                             : 'bg-gray-50 text-gray-500 hover:bg-gray-100 hover:text-[#111827]'
                           }`}
                         >
-                          <RotateCcw className={`w-4 h-4 mr-3 transition-transform ${openReturnOrderId === order.id ? 'rotate-180' : 'group-hover/btn:-rotate-45'}`} />
+                          <RotateCcw className={`w-4 h-4 mr-3 transition-transform ${openReturnOrderId === rowKey ? 'rotate-180' : 'group-hover/btn:-rotate-45'}`} />
                           Return
-                          <ChevronDown className={`w-4 h-4 ml-3 transition-transform duration-300 ${openReturnOrderId === order.id ? 'rotate-180' : 'opacity-40'}`} />
+                          <ChevronDown className={`w-4 h-4 ml-3 transition-transform duration-300 ${openReturnOrderId === rowKey ? 'rotate-180' : 'opacity-40'}`} />
+                        </button>
+                      ) : (
+                        <button 
+                          type="button"
+                          onClick={() => setOpenTrackOrderId(openTrackOrderId === rowKey ? null : rowKey)}
+                          className={`flex items-center justify-center px-10 py-3.5 border-[2px] transition-all rounded-full font-black text-[14px] group/btn ${
+                            openTrackOrderId === rowKey 
+                            ? 'border-[#7c3aed] text-[#7c3aed] bg-purple-50/10'
+                            : 'border-[#7c3aed] text-[#7c3aed] hover:bg-purple-50/50'
+                          }`}
+                        >
+                          Track
+                          <ChevronDown className={`w-4 h-4 ml-3 transition-transform duration-300 ${openTrackOrderId === rowKey ? 'rotate-180' : ''}`} />
                         </button>
                       )}
                     </div>
                   </div>
 
+                  {openDetailsOrderKey === rowKey && (
+                    <div className="border-t border-gray-100 bg-gradient-to-b from-gray-50/80 to-white px-6 md:px-10 py-8 animate-in fade-in slide-in-from-top-2 duration-300">
+                      <h4 className="text-[12px] font-black text-gray-400 uppercase tracking-widest mb-6">
+                        Order details
+                      </h4>
+                      <div className="mb-8 rounded-[20px] border border-gray-100 bg-white p-6 shadow-sm">
+                        <div className="flex flex-wrap items-center gap-3 mb-3">
+                          <span className="text-[12px] font-black text-gray-400 uppercase tracking-widest">
+                            Fulfillment
+                          </span>
+                          <span
+                            className={`inline-flex items-center px-3 py-1 rounded-full border text-[11px] font-black uppercase tracking-wider ${orderStatusBadgeClasses(order.status)}`}
+                          >
+                            {statusLabel}
+                          </span>
+                        </div>
+                        <p className="text-[14px] font-medium text-gray-600 leading-relaxed mb-4">
+                          {orderStatusDescription(order.status)}
+                        </p>
+                        {pipeIdx >= 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {ORDER_STATUS_PIPELINE.map((label) => {
+                              const myI = ORDER_STATUS_PIPELINE.indexOf(label);
+                              const done = myI < pipeIdx;
+                              const cur = myI === pipeIdx;
+                              return (
+                                <span
+                                  key={label}
+                                  className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wide border transition-colors ${
+                                    cur
+                                      ? 'border-[#f47a4d] bg-orange-50 text-[#f47a4d]'
+                                      : done
+                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                        : 'border-gray-100 bg-gray-50 text-gray-300'
+                                  }`}
+                                >
+                                  {label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : normalizeOrderStatus(order.status) ? (
+                          <p className="text-[12px] font-bold text-gray-500">
+                            This order uses a custom status; progress steps will appear once it maps to a standard stage.
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                        <div className="space-y-6">
+                          {shipTo ? (
+                            <div className="rounded-[20px] border border-orange-100 bg-white p-6 shadow-sm">
+                              <p className="text-[11px] font-black text-[#f47a4d] uppercase tracking-widest mb-2">
+                                {shipTo.label}
+                              </p>
+                              <p className="text-[15px] font-black text-[#111827] mb-1">{shipTo.name}</p>
+                              <p className="text-[14px] font-bold text-gray-600 mb-3">{shipTo.phone || '—'}</p>
+                              <p className="text-[13px] font-medium text-gray-500 leading-relaxed">{shipTo.line || '—'}</p>
+                            </div>
+                          ) : (
+                            <div className="rounded-[20px] border border-dashed border-gray-200 bg-white p-6 text-[13px] font-semibold text-gray-400">
+                              No shipping address on file for this order.
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-6">
+                          <div className="rounded-[20px] border border-gray-100 bg-white overflow-hidden shadow-sm">
+                            <div className="px-6 py-4 border-b border-gray-50 bg-gray-50/80">
+                              <span className="text-[13px] font-black text-[#111827]">Line items</span>
+                            </div>
+                            <div className="max-h-[320px] overflow-y-auto divide-y divide-gray-50">
+                              {Array.isArray(order.items) && order.items.length ? (
+                                order.items.map((line) => (
+                                  <div
+                                    key={line.id}
+                                    className="px-6 py-4 flex justify-between gap-4 text-left flex-wrap sm:flex-nowrap"
+                                  >
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-[14px] font-black text-[#111827] leading-snug">{lineItemTitle(line)}</p>
+                                      {line.item?.product_id ? (
+                                        <p className="text-[11px] font-bold text-gray-400 mt-1">
+                                          SKU: {String(line.item.product_id)}
+                                        </p>
+                                      ) : null}
+                                      <p className="text-[12px] font-bold text-gray-500 mt-2">Qty: {line.quantity ?? 1}</p>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                      <p className="text-[14px] font-black text-[#111827]">
+                                        ₹{' '}
+                                        {line.line_total != null ? formatInrAmount(line.line_total) : '—'}
+                                      </p>
+                                      <p className="text-[10px] font-bold text-gray-400 uppercase mt-1 tracking-tighter">
+                                        line total
+                                      </p>
+                                    </div>
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="px-6 py-10 text-[13px] font-semibold text-gray-400 text-center">
+                                  No line items loaded.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          <dl className="rounded-[20px] border border-gray-100 bg-white p-6 space-y-3 text-[14px]">
+                            <div className="flex justify-between">
+                              <dt className="font-bold text-gray-500">Items subtotal (excl.)</dt>
+                              <dd className="font-black text-[#111827]">₹ {formatInrAmount(order.total_price)}</dd>
+                            </div>
+                            <div className="flex justify-between">
+                              <dt className="font-bold text-gray-500">Tax</dt>
+                              <dd className="font-black text-[#111827]">
+                                ₹ {formatInrAmount(order.get_total_tax)}
+                              </dd>
+                            </div>
+                            <div className="flex justify-between">
+                              <dt className="font-bold text-gray-500">
+                                Discount{' '}
+                                {order.discount_percentage != null && Number(order.discount_percentage) > 0
+                                  ? `(${Number(order.discount_percentage)}%)`
+                                  : ''}
+                              </dt>
+                              <dd className="font-black text-emerald-700">
+                                − ₹ {formatInrAmount(order.get_discount_price)}
+                              </dd>
+                            </div>
+                            <div className="flex justify-between">
+                              <dt className="font-bold text-gray-500">Shipping</dt>
+                              <dd className="font-black text-[#111827]">₹ {formatInrAmount(order.shipping_cost)}</dd>
+                            </div>
+                            {Number(order.cod_cost) > 0 ? (
+                              <div className="flex justify-between">
+                                <dt className="font-bold text-gray-500">COD fee</dt>
+                                <dd className="font-black text-[#111827]">₹ {formatInrAmount(order.cod_cost)}</dd>
+                              </div>
+                            ) : null}
+                            <div className="flex justify-between pt-3 mt-3 border-t border-gray-100">
+                              <dt className="font-black text-[#111827]">Total (model)</dt>
+                              <dd className="font-black text-[#f47a4d] text-[18px]">
+                                ₹ {formatInrAmount(order.get_total_inclusive_all)}
+                              </dd>
+                            </div>
+                          </dl>
+                          {order.invoice_date ? (
+                            <p className="text-[12px] font-bold text-gray-400 text-center">
+                              Invoice dated {formatOrderWhen(order.invoice_date)}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Tracking Section */}
-                  {openTrackOrderId === order.id && (
+                  {openTrackOrderId === rowKey && (
                     <div className="bg-gray-50/30 border-t border-gray-100 p-8 md:p-10 animate-in slide-in-from-top-4 duration-500">
                       
                       {/* FAQ Card */}
@@ -676,7 +1052,7 @@ const Account = () => {
                           </div>
                           <div>
                             <h4 className="text-[18px] font-black text-[#111827] leading-none mb-1.5">Order Tracking</h4>
-                            <p className="text-[14px] font-medium text-gray-400">Your order is on its way</p>
+                            <p className="text-[14px] font-medium text-gray-400">{orderStatusDescription(order.status)}</p>
                           </div>
                         </div>
                         <div className="flex items-center space-x-3">
@@ -703,8 +1079,8 @@ const Account = () => {
                       <div className="relative pl-4 ml-4">
                         <div className="absolute left-0 top-2 bottom-8 w-[4.5px] bg-gray-100 rounded-full"></div>
                         <div className="space-y-6">
-                          {trackingSteps.map((step, idx) => (
-                            <div key={idx} className="relative pl-12">
+                          {fulfillmentTimeline.map((step, idx) => (
+                            <div key={`${step.title}-${idx}`} className="relative pl-12">
                               {/* Dot/Icon */}
                               <div className={`absolute left-[-18.5px] top-4 w-[32px] h-[32px] rounded-full flex items-center justify-center ring-4 ring-white z-10 ${
                                 step.status === 'completed' ? 'bg-[#7c3aed]' : 
@@ -715,7 +1091,7 @@ const Account = () => {
                               </div>
 
                               {/* Progress Line Color */}
-                              {idx < trackingSteps.length - 1 && (
+                              {idx < fulfillmentTimeline.length - 1 && (
                                 <div className={`absolute left-[-4.5px] top-[40px] w-[4.5px] h-[calc(100%+24px)] rounded-full z-0 ${
                                   step.status === 'completed' ? 'bg-[#7c3aed]' : 
                                   step.status === 'current' ? 'bg-gradient-to-b from-[#f47a4d] to-gray-100' : 'bg-gray-100'
@@ -752,7 +1128,7 @@ const Account = () => {
                   )}
 
                   {/* Return Section */}
-                  {openReturnOrderId === order.id && (
+                  {openReturnOrderId === rowKey && (
                     <div className="bg-gray-50/30 border-t border-gray-100 p-8 md:p-10 animate-in slide-in-from-top-4 duration-500">
                       {returnStep === 1 ? (
                         <>
@@ -861,8 +1237,77 @@ const Account = () => {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
+          </div>
+        )}
+
+        {activeTab === 'Addresses' && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+            {addressesError && (
+              <div className="mb-6 rounded-[16px] border border-red-100 bg-red-50 px-5 py-3 text-[14px] font-semibold text-red-600">
+                {addressesError}
+              </div>
+            )}
+            {addressesLoading ? (
+              <p className="text-center text-gray-400 font-bold py-16">Loading addresses…</p>
+            ) : savedAddresses.length ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {savedAddresses.map((a) => {
+                  const label = (a.label || '').trim() || 'Address';
+                  const name =
+                    `${a.first_name || ''} ${a.last_name || ''}`.trim() || auth?.user?.username || '—';
+                  const line = [
+                    a.apartment_address,
+                    a.street_address,
+                    a.city,
+                    a.state,
+                    a.country,
+                    a.zip,
+                  ]
+                    .filter(Boolean)
+                    .join(', ');
+                  return (
+                    <div
+                      key={a.id}
+                      className={`rounded-[24px] border-2 p-6 md:p-8 shadow-lg transition-all bg-white ${
+                        a.default ? 'border-[#f47a4d] shadow-orange-50/40' : 'border-gray-100'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-4">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <MapPin className="w-5 h-5 text-[#f47a4d] shrink-0" />
+                          <span className="text-[17px] font-black text-[#111827]">{label}</span>
+                          {a.default ? (
+                            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+                              Default
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <p className="text-[15px] font-black text-[#111827] mb-1">{name}</p>
+                      <p className="text-[14px] font-bold text-[#111827] mb-3">{a.mobile_no || '—'}</p>
+                      <p className="text-[13px] font-medium text-gray-500 leading-relaxed">{line || '—'}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-[28px] border border-gray-100 bg-gray-50/80 px-8 py-16 text-center max-w-xl mx-auto">
+                <MapPin className="w-14 h-14 text-gray-300 mx-auto mb-4 stroke-[1.5]" />
+                <p className="text-[17px] font-black text-[#111827] mb-2">No saved addresses</p>
+                <p className="text-[14px] text-gray-400 mb-8 leading-relaxed">
+                  Add a delivery address during checkout — it will be saved here on your account.
+                </p>
+                <Link
+                  to="/cart"
+                  className="inline-flex items-center px-8 py-3.5 bg-[#f47a4d] text-white rounded-full font-black text-[14px] hover:bg-[#ff8a5e] transition-all shadow-lg shadow-orange-100"
+                >
+                  Go to cart / checkout
+                </Link>
+              </div>
+            )}
           </div>
         )}
 

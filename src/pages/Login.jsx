@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { User, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { useDispatch } from 'react-redux';
 import { loginWithPassword } from '../api/auth';
@@ -12,7 +12,10 @@ const Login = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
+  const location = useLocation();
   const dispatch = useDispatch();
+  const redirectTo =
+    typeof location.state?.from === 'string' && location.state.from.startsWith('/') ? location.state.from : '/';
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -34,7 +37,7 @@ const Login = () => {
           tokens: data.tokens,
         })
       );
-      navigate('/');
+      navigate(redirectTo);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to login.');
     } finally {
